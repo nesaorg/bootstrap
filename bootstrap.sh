@@ -17,16 +17,10 @@
 # vars
 #
 
-MONIKER=$(hostname)
-WORKING_DIRECTORY="$HOME/nesa"
-MNEMONIC=${PRIV_KEY:}
-chain_id="nesa-testnet-3"
 terminal_size=$(stty size)
 terminal_height=${terminal_size% *}
 terminal_width=${terminal_size#* }
-
 prompt_height=${PROMPT_HEIGHT:-1}
-
 main_color=43
 logo=$(gum style '   ▄▄▄▄▄▄  
   ███▀▀▀██▄   
@@ -36,12 +30,18 @@ logo=$(gum style '   ▄▄▄▄▄▄
   ███   ███ 
   ███   ███')
 
+chain_id="nesa-testnet-3"
+domain=".nesa.sh"
+
+
 address="pending"
 is_validator="no"
-is_orchestrator="no"
 is_miner="no"
-online="booting"
-domain=".nesa.sh"
+status="booting"
+
+MONIKER=$(hostname)
+WORKING_DIRECTORY="$HOME/nesa"
+MNEMONIC=${PRIV_KEY:}
 
 #
 # basic helper functions
@@ -66,9 +66,8 @@ update_header() {
   ----------------
   [1;38;5;${main_color}maddress:       [0m${address}
   [1;38;5;${main_color}mvalidator:     [0m${is_validator}
-  [1;38;5;${main_color}morchestrator:  [0m${is_orchestrator}
   [1;38;5;${main_color}mminer:         [0m${is_miner}
-  [1;38;5;${main_color}monline:        [0m${online}")
+  [1;38;5;${main_color}mstatus:        [0m${status}")
     header=$(gum join --horizontal --align top "${logo}" '  ' "${info}")
 
     print_test "${header}"
@@ -250,6 +249,30 @@ get_model_names() {
     echo "$model_names"
 }
 
+save_to_env_file() {
+    local env_file="$WORKING_DIRECTORY/docker/.env"
+    echo "MONIKER=$MONIKER" > "$env_file"
+    echo "WORKING_DIRECTORY=$WORKING_DIRECTORY" >> "$env_file"
+    echo "MNEMONIC=$MNEMONIC" >> "$env_file"
+    echo "CHAIN_ID=$chain_id" >> "$env_file"
+    echo "MODEL_NAME=$MODEL_NAME" >> "$env_file"
+    echo "IS_VALIDATOR=$is_validator" >> "$env_file"
+    echo "IS_MINER=$is_miner" >> "$env_file"
+    echo "IS_ORCHESTRATOR=$is_orchestrator" >> "$env_file"
+    echo "ENV variables saved to $env_file"
+}
+
+load_from_env_file() {
+    local env_file="$WORKING_DIRECTORY/docker/.env"
+    if [ -f "$env_file" ]; then
+        source "$env_file"
+    else
+        echo "$env_file does not exist. Please run in wizard mode to create the config file."
+        exit 1
+    fi
+}
+
+
 
 #
 # bootstrap core logic
@@ -262,111 +285,168 @@ check_gum_installed
 clear
 update_header
 
-MONIKER=$(gum input --cursor.foreground "${main_color}" \
-    --prompt.foreground "${main_color}" \
-    --prompt "Choose a moniker for your node: " \
-    --placeholder "$MONIKER" \
-    --width 80 \
-    --value "$MONIKER")
 
-WORKING_DIRECTORY=$(gum input --cursor.foreground "${main_color}" \
-    --prompt.foreground "${main_color}" \
-    --prompt "Choose a working directory: " \
-    --placeholder "$WORKING_DIRECTORY" \
-    --width 80 \
-    --value "$WORKING_DIRECTORY")
+echo -e "Select a $(gum style --foreground "$main_color" "mode")"
+wizard_mode="Wizardy"
+advanced_mode="Advanced Wizardy"
 
-echo -e "Now, what type(s) of node is $(gum style --foreground "$main_color" "$MONIKER")?"
+mode=$(gum choose "$wizard_mode" "$advanced_mode")
 
-validator_string="Validator"
-# orchestrator_string="Orchestrator"
-miner_string="Miner"
-
-# NODE_TYPE=$(gum choose --no-limit "$validator_string" "$orchestrator_string" "$miner_string")
-node_type=$(gum choose --no-limit "$validator_string" "$miner_string")
-
-grep -q "$validator_string" <<<"$node_type" && is_validator="pending"
-# grep -q "$orchestrator_string" <<<"$NODE_TYPE" && is_orchestrator="pending"
-grep -q "$miner_string" <<<"$node_type" && is_miner="pending"
-
-clear
-update_header
-
-export MONIKER WORKING_DIRECTORY
-
-gum spin -s line --title "Setting up working directory and cloning node repository..." -- setup_work_dir
-
-if grep -q "$validator_string" <<<"$node_type"; then
-
-    if true; then
-        echo -e "Please apply to be a $(gum style --foreground "$main_color" "validator") node here: https://forms.gle/3fQQHVJbHqTPpmy58"
-    else
-        # keeping this here for now
-        if [ ! -n "$PRIV_KEY" ]; then
-            PRIV_KEY=$(gum input --cursor.foreground "${main_color}" \ 
-                --password \
-                --prompt.foreground "${main_color}" \
-                --prompt "Validator's Private Key: " \
-                --width 80)
+if grep -q "$advanced_mode" <<<"$mode"; then
+    load_from_env_file
+    echo -e "Current configuration:"
+    cat "$WORKING_DIRECTORY/.env"
+    confirm=$(gum confirm "Do you want to run this script with this configuration?")
+    if [ "$confirm" != "yes" ]; then
+        exit 0
+    fi
+else
 
 
-            # currently we aren't generating the keys for the validator
-            # will revisit this after initial launch
 
-            # export MNEMONIC=$(gum spin -s line --title "Generating your validator key and mnemonic..." -- bash -c '
-            #     docker run --rm --entrypoint nesad \
-            #         -e MONIKER="$MONIKER" \
-            #         docker pull ghcr.io/nesaorg/nesachain/nesachain:2024.05.13-02.30-ca95b04 \
-            #         keys add "$MONIKER" --output json | jq -r ".mnemonic"
-            # ')
+    MONIKER=$(gum input --cursor.foreground "${main_color}" \
+        --prompt.foreground "${main_color}" \
+        --prompt "Choose a moniker for your node: " \
+        --placeholder "$MONIKER" \
+        --width 80 \
+        --value "$MONIKER")
 
-            # echo -e "Your validator mnemonic is: $MNEMONIC"
+    WORKING_DIRECTORY=$(gum input --cursor.foreground "${main_color}" \
+        --prompt.foreground "${main_color}" \
+        --prompt "Choose a working directory: " \
+        --placeholder "$WORKING_DIRECTORY" \
+        --width 80 \
+        --value "$WORKING_DIRECTORY")
+
+    echo -e "Now, what type(s) of node is $(gum style --foreground "$main_color" "$MONIKER")? (use space to select which type(s)"
+
+    validator_string="Validator"
+    # orchestrator_string="Orchestrator"
+    miner_string="Miner"
+
+    # NODE_TYPE=$(gum choose --no-limit "$validator_string" "$orchestrator_string" "$miner_string")
+    node_type=$(gum choose --no-limit "$validator_string" "$miner_string")
+
+    grep -q "$validator_string" <<<"$node_type" && is_validator="pending"
+    # grep -q "$orchestrator_string" <<<"$NODE_TYPE" && is_orchestrator="pending"
+    grep -q "$miner_string" <<<"$node_type" && is_miner="pending"
+
+    clear
+    update_header
+
+    export MONIKER WORKING_DIRECTORY
+
+    gum spin -s line --title "Setting up working directory and cloning node repository..." -- setup_work_dir
+
+    if grep -q "$validator_string" <<<"$node_type"; then
+
+        if false; then
+            echo -e "Please apply to be a $(gum style --foreground "$main_color" "validator") node here: https://forms.gle/3fQQHVJbHqTPpmy58"
+        else
+            # keeping this here for now
+            if [ ! -n "$PRIV_KEY" ]; then
+                PRIV_KEY=$(gum input --cursor.foreground "${main_color}" \
+                    --password \
+                    --prompt.foreground "${main_color}" \
+                    --prompt "Validator's Private Key: " \
+                    --width 80)
+
+
+                # currently we aren't generating the keys for the validator
+                # will revisit this after initial launch
+
+                # export MNEMONIC=$(gum spin -s line --title "Generating your validator key and mnemonic..." -- bash -c '
+                #     docker run --rm --entrypoint nesad \
+                #         -e MONIKER="$MONIKER" \
+                #         https://ghcr.io/nesaorg/nesachain/nesachain:2024.05.13-02.30-ca95b04 \
+                #         keys add "$MONIKER" --output json | jq -r ".mnemonic"
+                # ')
+
+                # echo -e "Your validator mnemonic is: $MNEMONIC"
+            fi
+
+            # docker pull https://ghcr.io/nesaorg/nesachain/nesachain:2024.05.13-02.30-ca95b04
+
+            docker run --rm --entrypoint nesad \
+                        -e MONIKER="$MONIKER" \
+                        -e PRIV_KEY="$PRIV_KEY" \
+                        6a781c05800b \
+                        keys import-hex "$MONIKER" "$PRIV_KEY"
+
+            docker run --rm --entrypoint sh 6a781c05800b -c '
+                VAL_PUB_KEY=$(nesad tendermint show-validator | jq -r ".key") && \
+                jq -n \
+                    --arg pubkey "$VAL_PUB_KEY" \
+                    --arg moniker "'"$MONIKER"'" \
+                    '"'"'{
+                        pubkey: {
+                            "@type": "/cosmos.crypto.ed25519.PubKey",
+                            key: $pubkey
+                        },
+                        amount: "100000000000unes",
+                        moniker: $moniker,
+                        "commission-rate": "0.10",
+                        "commission-max-rate": "0.20",
+                        "commission-max-change-rate": "0.01",
+                        "min-self-delegation": "1"
+                    }'"'"' > /tmp/validator.json && \
+                nesad tx staking create-validator /tmp/validator.json --from "'"$MONIKER"'" --chain-id "'"$chain_id"'"
+            ' 
+
+            docker run --rm --entrypoint nesad \
+                    -e MONIKER="$MONIKER" \
+                    -e PRIV_KEY="$PRIV_KEY" \
+                    6a781c05800b \
+                    tx poa create-validator validator.json --from $MONIKER --chain-id $chain_id --keyring-backend test --gas auto --gas-adjustment 1.5 
+
         fi
-
-        nesad keys import-hex "$MONIKER" "$PRIV_KEY"
-
-        # debug this below
-        nesad tendermint show-validator | jq -n \
-            --arg moniker "$MONIKER" \
-            '{
-                pubkey: {
-                    "@type": .["@type"],
-                    key: .key
-                },
-                amount: "100000000000unes",
-                moniker: "epin",
-                "commission-rate": "0.10",
-                "commission-max-rate": "0.20",
-                "commission-max-change-rate": "0.01",
-                "min-self-delegation": "1"
-            }' > validator.json && nesad tx staking create-validator validator.json --from "$MONIKER" --chain-id "$chain_id"
     fi
 
-fi
+    if grep -q "$miner_string" <<<"$node_type"; then
 
-# if grep -q "$orchestrator_string" <<<"$NODE_TYPE"; then
-    
-#     sleep 2
-# fi
+        echo -e "Now, what type of miner will $(gum style --foreground "$main_color" "$MONIKER") be?"
+        distributed_string="Distributed Miner"
+        non_distributed_string="Non-Distributed Miner"
 
-if grep -q "$miner_string" <<<"$node_type"; then
-
-    echo -e "Now, what type of miner will $(gum style --foreground "$main_color" "$MONIKER") be?"
-    distributed_string="Distributed Miner"
-    non_distributed_string="Non-Distributed Miner"
-
-    miner_type=$(gum choose "$distributed_string" "$non_distributed_string")
+        miner_type=$(gum choose "$distributed_string" "$non_distributed_string")
 
 
-    if grep -q "$distributed_string" <<<"$miner_type"; then
+        if grep -q "$distributed_string" <<<"$miner_type"; then
 
-        echo -e "Would you like to join an existing $(gum style --foreground "$main_color" "swarm") or start a new one?"
-        existing_swarm="Join existing swarm"
-        new_swarm="Start a new swarm"
+            echo -e "Would you like to join an existing $(gum style --foreground "$main_color" "swarm") or start a new one?"
+            existing_swarm="Join existing swarm"
+            new_swarm="Start a new swarm"
 
-        distributed_type=$(gum choose "$existing_swarm" "$new_swarm")
+            distributed_type=$(gum choose "$existing_swarm" "$new_swarm")
 
-        if grep -q "$distributed_type" <<<"$new_swarm"; then
+            if grep -q "$distributed_type" <<<"$new_swarm"; then
+                MODEL_NAME=$(
+                    gum input --cursor.foreground "${main_color}" \
+                        --prompt.foreground "${main_color}" \
+                        --prompt "Which model would you like to run? (meta-llama/Llama-2-13b-Chat-Hf)" \
+                        --placeholder "$MODEL_NAME" \
+                        --width 80 \
+                        --value "$MODEL_NAME"
+                )
+
+                # here I need to save the model name to an environment variable/config, and then spin up the orchestrator
+                # which will read the model it wants to load from the env variable.
+                # note: it's important that the orchestrator reads the model from the env and then registers itself on chain for that model.
+                # otherwise nobody will ever connect to
+
+            else # existing swarm
+                # I need to query the blockchain to get the list of models that currently have swarms they can join
+                # and then it needs to allow them to select one using gum choose (assuming there aren't too many options)
+                # then whichever one they choose I can take the address of that swarm's agent and build the orchestrator address 
+                # and set it to an environment variable so the new block miner can connect to the desired swarm
+                swarms_map=$(get_swarms_map)
+                model_names=$(get_model_names "$swarms_map")
+                echo -e "Which existing $(gum style --foreground "$main_color" "swarm") would you like to join?"
+                MODEL_NAME=$(echo "$model_names" | gum choose --no-limit)
+            fi
+
+        else # non-distributed setup
+
             MODEL_NAME=$(
                 gum input --cursor.foreground "${main_color}" \
                     --prompt.foreground "${main_color}" \
@@ -375,36 +455,10 @@ if grep -q "$miner_string" <<<"$node_type"; then
                     --width 80 \
                     --value "$MODEL_NAME"
             )
-
-            # here I need to save the model name to an environment variable/config, and then spin up the orchestrator
-            # which will read the model it wants to load from the env variable.
-            # note: it's important that the orchestrator reads the model from the env and then registers itself on chain for that model.
-            # otherwise nobody will ever connect to
-
-        else # existing swarm
-            # I need to query the blockchain to get the list of models that currently have swarms they can join
-            # and then it needs to allow them to select one using gum choose (assuming there aren't too many options)
-            # then whichever one they choose I can take the address of that swarm's agent and build the orchestrator address 
-            # and set it to an environment variable so the new block miner can connect to the desired swarm
-            swarms_map=$(get_swarms_map)
-            model_names=$(get_model_names "$swarms_map")
-            echo -e "Which existing $(gum style --foreground "$main_color" "swarm") would you like to join?"
-            MODEL_NAME=$(echo "$model_names" | gum choose --no-limit)
         fi
-
-    else # non-distributed setup
-
-        MODEL_NAME=$(
-            gum input --cursor.foreground "${main_color}" \
-                --prompt.foreground "${main_color}" \
-                --prompt "Which model would you like to run? (meta-llama/Llama-2-13b-Chat-Hf)" \
-                --placeholder "$MODEL_NAME" \
-                --width 80 \
-                --value "$MODEL_NAME"
-        )
     fi
+    save_to_env_file
 fi
-
 
 # when the configuration is all said and done we need to make sure to expore the variables that need to be passed down and/or saved
 # for any future runs
@@ -415,7 +469,7 @@ cd "$WORKING_DIRECTORY/docker"
 
 gum spin -s line --title "Booting $(gum style --foreground "$main_color" "$MONIKER")..." -- docker-compose up -d
 cd -
-echo -e "Congratulations! Your $(gum style --foreground "$main_color" "nesa") node was successfully bootstrapped!?"
+echo -e "Congratulations! Your $(gum style --foreground "$main_color" "nesa") node was successfully bootstrapped!"
 
 
 
