@@ -17,6 +17,7 @@
 # vars
 #
 
+# set -x
 terminal_size=$(stty size)
 terminal_height=${terminal_size% *}
 terminal_width=${terminal_size#* }
@@ -32,12 +33,16 @@ logo=$(gum style '   ▄▄▄▄▄▄
 
 chain_id="nesa-testnet-3"
 domain=".nesa.sh"
+chain_container="9eef1e0f504e"
+# chain_container="ghcr.io/nesaorg/nesachain/nesachain:test"
 
+import_key_expect_url="https://raw.githubusercontent.com/nesaorg/bootstrap/master/import_key.expect"
 
 address="pending"
 is_validator="no"
 is_miner="no"
 status="booting"
+
 
 MONIKER=$(hostname)
 WORKING_DIRECTORY="$HOME/nesa"
@@ -179,6 +184,14 @@ install_jq() {
     esac
 }
 
+# check if Docker is installed
+check_docker_installed() {
+    if ! command_exists docker; then
+        echo "Docker is not installed. Please install Docker and try again."
+        exit 1
+    fi
+}
+
 # calculate max line length of the input
 max_line_length() {
     local max_len
@@ -195,6 +208,13 @@ max_line_length() {
     echo "$max_len"
 }
 
+download_import_key_expect() {
+    # curl -o import_key.expect "$IMPORT_KEY_EXPECT_URL"
+    # chmod +x "$WORKING_DIRECTORY/import_key.expect"
+
+    cp import_key.expect "$WORKING_DIRECTORY/"
+}
+
 setup_work_dir() {
     if [ ! -d "$WORKING_DIRECTORY" ]; then
         mkdir -p "$WORKING_DIRECTORY"
@@ -205,6 +225,8 @@ setup_work_dir() {
         echo -e "Error changing to working directory: $WORKING_DIRECTORY"
         exit 1
     }
+
+    download_import_key_expect
 
     # Clone or pull the latest changes if the repo already exists
     if [ ! -d "docker" ]; then
@@ -239,6 +261,10 @@ get_swarms_map() {
     echo "$map"
 }
 
+
+
+
+
 # Function to get the list of model names from the map
 get_model_names() {
     local map="$1"
@@ -258,7 +284,6 @@ save_to_env_file() {
     echo "MODEL_NAME=$MODEL_NAME" >> "$env_file"
     echo "IS_VALIDATOR=$is_validator" >> "$env_file"
     echo "IS_MINER=$is_miner" >> "$env_file"
-    echo "IS_ORCHESTRATOR=$is_orchestrator" >> "$env_file"
     echo "ENV variables saved to $env_file"
 }
 
@@ -280,6 +305,7 @@ load_from_env_file() {
 
 # deps
 check_gum_installed
+check_docker_installed
 # check_jq_installed
 
 clear
@@ -340,66 +366,110 @@ else
 
     if grep -q "$validator_string" <<<"$node_type"; then
 
-        if false; then
-            echo -e "Please apply to be a $(gum style --foreground "$main_color" "validator") node here: https://forms.gle/3fQQHVJbHqTPpmy58"
-        else
-            # keeping this here for now
-            if [ ! -n "$PRIV_KEY" ]; then
-                PRIV_KEY=$(gum input --cursor.foreground "${main_color}" \
-                    --password \
-                    --prompt.foreground "${main_color}" \
-                    --prompt "Validator's Private Key: " \
-                    --width 80)
+        # echo -e "Please apply to be a $(gum style --foreground "$main_color" "validator") node here: https://forms.gle/3fQQHVJbHqTPpmy58"
 
+        if [ ! -n "$PRIV_KEY" ]; then
+            PRIV_KEY=$(gum input --cursor.foreground "${main_color}" \
+                --password \
+                --prompt.foreground "${main_color}" \
+                --prompt "Validator's private key: " \
+                --width 80)
 
-                # currently we aren't generating the keys for the validator
-                # will revisit this after initial launch
+            PASSWORD=$(gum input --cursor.foreground "${main_color}" \
+                --password \
+                --prompt.foreground "${main_color}" \
+                --prompt "Password for the private key: " \
+                --width 80)
 
-                # export MNEMONIC=$(gum spin -s line --title "Generating your validator key and mnemonic..." -- bash -c '
-                #     docker run --rm --entrypoint nesad \
-                #         -e MONIKER="$MONIKER" \
-                #         https://ghcr.io/nesaorg/nesachain/nesachain:2024.05.13-02.30-ca95b04 \
-                #         keys add "$MONIKER" --output json | jq -r ".mnemonic"
-                # ')
+            docker pull ghcr.io/nesaorg/nesachain/nesachain:test
+            docker volume create nesachain-data
 
-                # echo -e "Your validator mnemonic is: $MNEMONIC"
-            fi
+            docker run --rm -v nesachain-data:/app/.nesachain -e MONIKER="$MONIKER" -e CHAIN_ID="$chain_id" -p 26656:26656 -p 26657:26657 -p 1317:1317 -p 9090:9090 -p 2345:2345 $chain_container
 
-            # docker pull https://ghcr.io/nesaorg/nesachain/nesachain:2024.05.13-02.30-ca95b04
+            ./import_key.expect "$MONIKER" "$PRIV_KEY" "$chain_container" "$PASSWORD"
 
-            docker run --rm --entrypoint nesad \
-                        -e MONIKER="$MONIKER" \
-                        -e PRIV_KEY="$PRIV_KEY" \
-                        6a781c05800b \
-                        keys import-hex "$MONIKER" "$PRIV_KEY"
-
-            docker run --rm --entrypoint sh 6a781c05800b -c '
-                VAL_PUB_KEY=$(nesad tendermint show-validator | jq -r ".key") && \
-                jq -n \
-                    --arg pubkey "$VAL_PUB_KEY" \
-                    --arg moniker "'"$MONIKER"'" \
-                    '"'"'{
-                        pubkey: {
-                            "@type": "/cosmos.crypto.ed25519.PubKey",
-                            key: $pubkey
-                        },
-                        amount: "100000000000unes",
-                        moniker: $moniker,
-                        "commission-rate": "0.10",
-                        "commission-max-rate": "0.20",
-                        "commission-max-change-rate": "0.01",
-                        "min-self-delegation": "1"
-                    }'"'"' > /tmp/validator.json && \
-                nesad tx staking create-validator /tmp/validator.json --from "'"$MONIKER"'" --chain-id "'"$chain_id"'"
-            ' 
-
-            docker run --rm --entrypoint nesad \
-                    -e MONIKER="$MONIKER" \
-                    -e PRIV_KEY="$PRIV_KEY" \
-                    6a781c05800b \
-                    tx poa create-validator validator.json --from $MONIKER --chain-id $chain_id --keyring-backend test --gas auto --gas-adjustment 1.5 
 
         fi
+
+
+        # docker run --entrypoint sh -v nesachain-data:/app/.nesachain/ "$chain_container" -c '
+        #     VAL_PUB_KEY=$(nesad tendermint show-validator | jq -r ".key") && \
+        #     jq -n \
+        #         --arg pubkey "$VAL_PUB_KEY" \
+        #         --arg moniker "'"$MONIKER"'" \
+        #         '"'"'{
+        #             pubkey: {
+        #                 "@type": "/cosmos.crypto.ed25519.PubKey",
+        #                 key: $pubkey
+        #             },
+        #             amount: "100000000000unes",
+        #             moniker: $moniker,
+        #             "commission-rate": "0.10",
+        #             "commission-max-rate": "0.20",
+        #             "commission-max-change-rate": "0.01",
+        #             "min-self-delegation": "1"
+        #         }'"'"' > /tmp/validator.json && \
+        #     nesad tx staking create-validator /tmp/validator.json --from "'"$MONIKER"'" --chain-id "'"$chain_id"'"
+        # ' 
+
+
+        # docker run --rm --entrypoint sh -v nesachain-data:/app/.nesachain/.nesachain $chain_container -c '
+        #     VAL_PUB_KEY=$(nesad tendermint show-validator | jq -r ".key") && \
+        #     echo "VAL_PUB_KEY: $VAL_PUB_KEY" && \
+        #     jq -n \
+        #         --arg pubkey "$VAL_PUB_KEY" \
+        #         --arg moniker "$MONIKER" \
+        #         "{
+        #             pubkey: {
+        #                 "@type": "/cosmos.crypto.ed25519.PubKey",
+        #                 key: $pubkey
+        #             },
+        #             amount: "100000000000unes",
+        #             moniker: $moniker,
+        #             "commission-rate": "0.10",
+        #             "commission-max-rate": "0.20",
+        #             "commission-max-change-rate": "0.01",
+        #             "min-self-delegation": "1"
+        #         }'"'"' > /tmp/validator.json && \
+        #     cat /tmp/validator.json && \
+        #     nesad tx staking create-validator /tmp/validator.json --from "'"$MONIKER"'" --chain-id "'"$CHAIN_ID"'" --keyring-backend test --gas auto --gas-adjustment 1.5
+        # '
+        
+        docker run --rm --entrypoint sh -v nesachain-data:/app/.nesachain -p 26656:26656 -p 26657:26657 -p 1317:1317 -p 9090:9090 -p 2345:2345 $chain_container -c '
+            VAL_PUB_KEY=$(nesad tendermint show-validator | jq -r ".key") && \
+            echo "VAL_PUB_KEY: $VAL_PUB_KEY" && \
+            jq -n \
+                --arg pubkey "$VAL_PUB_KEY" \
+                --arg amount "100000000000unes" \
+                --arg moniker "'"$MONIKER"'" \
+                --arg chain_id "'"$CHAIN_ID"'" \
+                --arg commission_rate "0.10" \
+                --arg commission_max_rate "0.20" \
+                --arg commission_max_change_rate "0.01" \
+                --arg min_self_delegation "1" \
+                '"'"'{
+                    pubkey: {"@type":"/cosmos.crypto.ed25519.PubKey", "key": $pubkey},
+                    amount: $amount,
+                    moniker: $moniker,
+                    "commission-rate": $commission_rate,
+                    "commission-max-rate": $commission_max_rate,
+                    "commission-max-change-rate": $commission_max_change_rate,
+                    "min-self-delegation": $min_self_delegation
+                }'"'"' > /app/.nesachain/validator.json && \
+            cat /app/.nesachain/validator.json
+        '
+
+        ehco "sending tx from $MONIKER"
+        docker run --rm --entrypoint nesad -v nesachain-data:/app/.nesachain $chain_container tx staking create-validator /app/.nesachain/validator.json --from "$MONIKER" --chain-id "$CHAIN_ID" --gas auto --gas-adjustment 1.5 --node https://rpc.test.nesa.ai
+  
+
+
+        # docker run --entrypoint nesad \
+        #         -e MONIKER="$MONIKER" \
+        #         -e PRIV_KEY="$PRIV_KEY" \
+        #         -v nesachain-data:/app/.nesachain/ \
+        #         "$chain_container" \
+        #         tx poa create-validator validator.json --from="$MONIKER" --chain-id="$chain_id" --keyring-backend="test" --gas auto --gas-adjustment 1.5 
     fi
 
     if grep -q "$miner_string" <<<"$node_type"; then
@@ -469,7 +539,7 @@ cd "$WORKING_DIRECTORY/docker"
 
 gum spin -s line --title "Booting $(gum style --foreground "$main_color" "$MONIKER")..." -- docker-compose up -d
 cd -
+
+docker run --rm -v nesachain-data:/app/.nesachain -p 26656:26656 -p 26657:26657 -p 1317:1317 -p 9090:9090 -p 2345:2345 -d "$chain_container"
 echo -e "Congratulations! Your $(gum style --foreground "$main_color" "nesa") node was successfully bootstrapped!"
-
-
-
+set +x
