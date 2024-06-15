@@ -42,11 +42,14 @@ address="pending"
 is_validator="no"
 is_miner="no"
 status="booting"
+init_pwd=$PWD
 
 
-MONIKER=$(hostname)
-WORKING_DIRECTORY="$HOME/nesa"
-MNEMONIC=${PRIV_KEY:}
+WORKING_DIRECTORY=${WORKING_DIRECTORY:-"$HOME/nesa"}
+env_file="$WORKING_DIRECTORY/.env"
+
+
+
 
 #
 # basic helper functions
@@ -147,7 +150,7 @@ check_gum_installed() {
 
 check_jq_installed() {
     if ! command -v jq &>/dev/null; then
-        gum spin -s line --title "Installing jq..." -- install_jq
+        install_jq
     fi
 }
 
@@ -155,15 +158,15 @@ install_jq() {
     case "$(uname -s)" in
     Linux)
         if command -v apt-get &>/dev/null; then
-            sudo apt-get update && sudo apt-get install -y jq
+            gum spin -s line --title "Installing jq with apt-get..." -- sudo apt-get update && sudo apt-get install -y jq
         elif command -v yum &>/dev/null; then
-            sudo yum install -y jq
+            gum spin -s line --title "Installing jq with yum..." -- sudo yum install -y jq
         elif command -v pacman &>/dev/null; then
-            sudo pacman -Sy jq
+            gum spin -s line --title "Installing jq with pacman..." -- sudo pacman -Sy jq
         elif command -v zypper &>/dev/null; then
-            sudo zypper install -y jq
+            gum spin -s line --title "Installing jq with zypper..." -- sudo zypper install -y jq
         elif command -v dnf &>/dev/null; then
-            sudo dnf install -y jq
+            gum spin -s line --title "Installing jq with dnf..." -- sudo dnf install -y jq
         else
             echo "Package manager not found. Please install jq manually."
             exit 1
@@ -171,7 +174,7 @@ install_jq() {
         ;;
     Darwin)
         if command -v brew &>/dev/null; then
-            brew install jq
+            gum spin -s line --title "Installing jq with brew..." -- brew install jq
         else
             echo "Homebrew is not installed. Please install jq manually."
             exit 1
@@ -183,6 +186,7 @@ install_jq() {
         ;;
     esac
 }
+
 
 # check if Docker is installed
 check_docker_installed() {
@@ -228,15 +232,17 @@ setup_work_dir() {
 
     download_import_key_expect
 
+
     # Clone or pull the latest changes if the repo already exists
     if [ ! -d "docker" ]; then
-        echo "Cloning the nesaorg/docker repository..."
-        git clone https://github.com/nesaorg/docker.git
+        gum spin -s line --title "Cloning the nesaorg/docker repository..." -- git clone https://github.com/nesaorg/docker.git
     else
-        echo "Repository already exists. Pulling latest updates..."
-        cd docker && git pull && cd ..
+        cd docker
+        gum spin -s line --title "Pulling latest updates from nesaorg/docker repository..." -- git pull
+        cd ..
     fi
 }
+
 
 
 get_swarms_map() {
@@ -276,19 +282,47 @@ get_model_names() {
 }
 
 save_to_env_file() {
-    local env_file="$WORKING_DIRECTORY/docker/.env"
     echo "MONIKER=$MONIKER" > "$env_file"
     echo "WORKING_DIRECTORY=$WORKING_DIRECTORY" >> "$env_file"
-    echo "MNEMONIC=$MNEMONIC" >> "$env_file"
+    echo "PRIV_KEY=$PRIV_KEY" >> "$env_file"
     echo "CHAIN_ID=$chain_id" >> "$env_file"
     echo "MODEL_NAME=$MODEL_NAME" >> "$env_file"
+    echo "HUGGINGFACE_API_KEY=$HUGGINGFACE_API_KEY" >> "$env_file"
     echo "IS_VALIDATOR=$is_validator" >> "$env_file"
     echo "IS_MINER=$is_miner" >> "$env_file"
     echo "ENV variables saved to $env_file"
 }
 
+
+
+compose_up() {
+    local compose_files
+    compose_files="compose.yml -f compose.agent.yml"
+
+    if [[ "$node_type" == *"Miner"* ]]; then
+        if [[ "$miner_type" == *"Non-Distributed Miner"* ]]; then
+            compose_files+=" -f compose.non-dist.yml"
+        elif [[ "$miner_type" == *"Distributed Miner"* ]]; then
+            if [[ "$distributed_type" == *"Start a new swarm"* ]]; then
+                compose_files+=" -f compose.dist-c.yml"
+            else
+                compose_files+=" -f compose.dist-s.yml"
+            fi
+        fi
+    fi
+
+    echo "Using compose files: $compose_files"
+    gum spin -s line --title "Starting Docker Compose..." -- docker compose -f $compose_files up -d --wait
+
+    if [[ $? -ne 0 ]]; then
+        echo "Error: Docker Compose failed to start."
+        exit 1
+    else
+        echo "Docker Compose started successfully."
+    fi
+}
+
 load_from_env_file() {
-    local env_file="$WORKING_DIRECTORY/docker/.env"
     if [ -f "$env_file" ]; then
         source "$env_file"
     else
@@ -297,6 +331,10 @@ load_from_env_file() {
     fi
 }
 
+load_from_env_file
+MONIKER=${MONIKER:$(hostname)}
+PRIV_KEY=${PRIV_KEY:-""}
+HUGGINGFACE_API_KEY=${HUGGINGFACE_API_KEY:-""}
 
 
 #
@@ -321,7 +359,7 @@ mode=$(gum choose "$wizard_mode" "$advanced_mode")
 if grep -q "$advanced_mode" <<<"$mode"; then
     load_from_env_file
     echo -e "Current configuration:"
-    cat "$WORKING_DIRECTORY/.env"
+    cat $env_file
     confirm=$(gum confirm "Do you want to run this script with this configuration?")
     if [ "$confirm" != "yes" ]; then
         exit 0
@@ -336,6 +374,9 @@ else
         --placeholder "$MONIKER" \
         --width 80 \
         --value "$MONIKER")
+
+    MONIKER=$(echo "$MONIKER" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
 
     WORKING_DIRECTORY=$(gum input --cursor.foreground "${main_color}" \
         --prompt.foreground "${main_color}" \
@@ -363,6 +404,7 @@ else
     export MONIKER WORKING_DIRECTORY
 
     gum spin -s line --title "Setting up working directory and cloning node repository..." -- setup_work_dir
+    setup_work_dir
 
     if grep -q "$validator_string" <<<"$node_type"; then
 
@@ -391,50 +433,6 @@ else
 
         fi
 
-
-        # docker run --entrypoint sh -v nesachain-data:/app/.nesachain/ "$chain_container" -c '
-        #     VAL_PUB_KEY=$(nesad tendermint show-validator | jq -r ".key") && \
-        #     jq -n \
-        #         --arg pubkey "$VAL_PUB_KEY" \
-        #         --arg moniker "'"$MONIKER"'" \
-        #         '"'"'{
-        #             pubkey: {
-        #                 "@type": "/cosmos.crypto.ed25519.PubKey",
-        #                 key: $pubkey
-        #             },
-        #             amount: "100000000000unes",
-        #             moniker: $moniker,
-        #             "commission-rate": "0.10",
-        #             "commission-max-rate": "0.20",
-        #             "commission-max-change-rate": "0.01",
-        #             "min-self-delegation": "1"
-        #         }'"'"' > /tmp/validator.json && \
-        #     nesad tx staking create-validator /tmp/validator.json --from "'"$MONIKER"'" --chain-id "'"$chain_id"'"
-        # ' 
-
-
-        # docker run --rm --entrypoint sh -v nesachain-data:/app/.nesachain/.nesachain $chain_container -c '
-        #     VAL_PUB_KEY=$(nesad tendermint show-validator | jq -r ".key") && \
-        #     echo "VAL_PUB_KEY: $VAL_PUB_KEY" && \
-        #     jq -n \
-        #         --arg pubkey "$VAL_PUB_KEY" \
-        #         --arg moniker "$MONIKER" \
-        #         "{
-        #             pubkey: {
-        #                 "@type": "/cosmos.crypto.ed25519.PubKey",
-        #                 key: $pubkey
-        #             },
-        #             amount: "100000000000unes",
-        #             moniker: $moniker,
-        #             "commission-rate": "0.10",
-        #             "commission-max-rate": "0.20",
-        #             "commission-max-change-rate": "0.01",
-        #             "min-self-delegation": "1"
-        #         }'"'"' > /tmp/validator.json && \
-        #     cat /tmp/validator.json && \
-        #     nesad tx staking create-validator /tmp/validator.json --from "'"$MONIKER"'" --chain-id "'"$CHAIN_ID"'" --keyring-backend test --gas auto --gas-adjustment 1.5
-        # '
-        
         docker run --rm --entrypoint sh -v nesachain-data:/app/.nesachain -p 26656:26656 -p 26657:26657 -p 1317:1317 -p 9090:9090 -p 2345:2345 $chain_container -c '
             VAL_PUB_KEY=$(nesad tendermint show-validator | jq -r ".key") && \
             echo "VAL_PUB_KEY: $VAL_PUB_KEY" && \
@@ -481,7 +479,7 @@ else
         miner_type=$(gum choose "$distributed_string" "$non_distributed_string")
 
 
-        if grep -q "$distributed_string" <<<"$miner_type"; then
+        if grep -q "$miner_type" <<<"$distributed_string"; then
 
             echo -e "Would you like to join an existing $(gum style --foreground "$main_color" "swarm") or start a new one?"
             existing_swarm="Join existing swarm"
@@ -494,6 +492,15 @@ else
                     gum input --cursor.foreground "${main_color}" \
                         --prompt.foreground "${main_color}" \
                         --prompt "Which model would you like to run? (meta-llama/Llama-2-13b-Chat-Hf)" \
+                        --placeholder "$MODEL_NAME" \
+                        --width 80 \
+                        --value "$MODEL_NAME"
+                )
+
+                HUGGINGFACE_API_KEY=$(
+                    gum input --cursor.foreground "${main_color}" \
+                        --prompt.foreground "${main_color}" \
+                        --prompt "Please provide your Huggingface API key:" \
                         --placeholder "$MODEL_NAME" \
                         --width 80 \
                         --value "$MODEL_NAME"
@@ -520,7 +527,16 @@ else
             MODEL_NAME=$(
                 gum input --cursor.foreground "${main_color}" \
                     --prompt.foreground "${main_color}" \
-                    --prompt "Which model would you like to run? (meta-llama/Llama-2-13b-Chat-Hf)" \
+                    --prompt "Which model would you like to run? ()" \
+                    --placeholder "$MODEL_NAME" \
+                    --width 80 \
+                    --value "$MODEL_NAME"
+            )
+
+            HUGGINGFACE_API_KEY=$(
+                gum input --cursor.foreground "${main_color}" \
+                    --prompt.foreground "${main_color}" \
+                    --prompt "Please provide your Huggingface API key:" \
                     --placeholder "$MODEL_NAME" \
                     --width 80 \
                     --value "$MODEL_NAME"
@@ -537,9 +553,11 @@ fi
 
 cd "$WORKING_DIRECTORY/docker"
 
-gum spin -s line --title "Booting $(gum style --foreground "$main_color" "$MONIKER")..." -- docker-compose up -d
-cd -
+# Temp while testing
+# docker run --rm -v nesachain-data:/app/.nesachain -p 26656:26656 -p 26657:26657 -p 1317:1317 -p 9090:9090 -p 2345:2345 -d "$chain_container"
 
-docker run --rm -v nesachain-data:/app/.nesachain -p 26656:26656 -p 26657:26657 -p 1317:1317 -p 9090:9090 -p 2345:2345 -d "$chain_container"
+compose_up
+cd "$init_pwd"
+
 echo -e "Congratulations! Your $(gum style --foreground "$main_color" "nesa") node was successfully bootstrapped!"
-set +x
+# set +x
