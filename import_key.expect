@@ -1,0 +1,46 @@
+#!/usr/bin/expect -f
+set timeout -1
+
+# Read arguments
+set moniker [lindex $argv 0]
+set priv_key [lindex $argv 1]
+set docker_image [lindex $argv 2]
+set password [lindex $argv 3]
+
+# Check the values of the variables
+if { $moniker == "" || $priv_key == "" || $docker_image == "" } {
+    puts "Error: One or more required variables are empty."
+    exit 1
+}
+
+spawn docker run -it --entrypoint nesad -v nesachain-data:/app/.nesachain $docker_image keys import-hex $moniker $priv_key
+
+# Handle the first passphrase prompt
+expect {
+    "*passphrase*" {
+        send -- "$password\r"
+    }
+    eof {
+        puts "Unexpected EOF encountered"
+        exit 1
+    }
+}
+
+# Handle the re-enter passphrase prompt
+expect {
+    "*Re-enter keyring passphrase*" {
+        send -- "$password\r"
+    }
+    eof {
+        puts "Unexpected EOF encountered"
+        exit 1
+    }
+    "*cannot overwrite key*" {
+        puts "Private key exists in keyring already."
+        exit 0
+    }
+}
+
+expect eof
+
+puts "Key import process completed successfully."
