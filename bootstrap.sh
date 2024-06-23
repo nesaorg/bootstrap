@@ -289,6 +289,8 @@ get_model_names() {
 
 save_to_env_file() {
     echo "MONIKER=$MONIKER" > "$env_file"
+    echo "NODE_HOST_NAME=$NODE_HOST_NAME" >> "$env_file"
+    echo "OP_EMAIL=$OP_EMAIL" >> "$env_file"
     echo "WORKING_DIRECTORY=$WORKING_DIRECTORY" >> "$env_file"
     echo "PRIV_KEY=$PRIV_KEY" >> "$env_file"
     echo "CHAIN_ID=$chain_id" >> "$env_file"
@@ -296,7 +298,11 @@ save_to_env_file() {
     echo "HUGGINGFACE_API_KEY=$HUGGINGFACE_API_KEY" >> "$env_file"
     echo "IS_VALIDATOR=$is_validator" >> "$env_file"
     echo "IS_MINER=$is_miner" >> "$env_file"
-    echo "ENV variables saved to $env_file"
+    echo "IS_DIST=$IS_DIST" >> "$env_file"
+    echo "IP_ADDRESS=$IP_ADDRESS" >> "$env_file"
+    echo "INITIAL_PEER=$INITIAL_PEER" >> "$env_file"
+
+    echo "config saved to $env_file"
 }
 
 
@@ -328,6 +334,7 @@ compose_up() {
     fi
 }
 
+
 load_from_env_file() {
     if [ -f "$env_file" ]; then
         source "$env_file"
@@ -342,7 +349,12 @@ load_from_env_file "wizard"
 MONIKER=${MONIKER:$(hostname)}
 PRIV_KEY=${PRIV_KEY:-""}
 HUGGINGFACE_API_KEY=${HUGGINGFACE_API_KEY:-""}
+MODEL_NAME=${MODEL_NAME:-""}
+OP_EMAIL=${OP_EMAIL:-""}
 
+# don't use cached/saved values for these 
+PUBLIC_IP=$(curl -s ifconfig.me)
+NODE_HOSTNAME="$MONIKER.test.nesa.sh"
 
 #
 # bootstrap core logic
@@ -487,7 +499,7 @@ else
 
 
         if grep -q "$miner_type" <<<"$distributed_string"; then
-
+            IS_DIST=True
             echo -e "Would you like to join an existing $(gum style --foreground "$main_color" "swarm") or start a new one?"
             existing_swarm="Join existing swarm"
             new_swarm="Start a new swarm"
@@ -498,7 +510,7 @@ else
                 MODEL_NAME=$(
                     gum input --cursor.foreground "${main_color}" \
                         --prompt.foreground "${main_color}" \
-                        --prompt "Which model would you like to run? (meta-llama/Llama-2-13b-Chat-Hf)" \
+                        --prompt "Which model would you like to run? " \
                         --placeholder "$MODEL_NAME" \
                         --width 80 \
                         --value "$MODEL_NAME"
@@ -507,10 +519,11 @@ else
                 HUGGINGFACE_API_KEY=$(
                     gum input --cursor.foreground "${main_color}" \
                         --prompt.foreground "${main_color}" \
-                        --prompt "Please provide your Huggingface API key:" \
-                        --placeholder "$MODEL_NAME" \
+                        --prompt "Please provide your Huggingface API key: " \
+                        --placeholder "$HUGGINGFACE_API_KEY" \
                         --width 80 \
-                        --value "$MODEL_NAME"
+                        --value "$HUGGINGFACE_API_KEY
+                        "
                 )
 
                 # here I need to save the model name to an environment variable/config, and then spin up the orchestrator
