@@ -114,7 +114,13 @@ install_gum() {
         brew install gum || handle_install_failure
         ;;
     Linux)
-        if command_exists pacman; then
+        if command_exists apt-get; then
+            echo "Installing Gum on Ubuntu/Debian..."
+            sudo mkdir -p /etc/apt/keyrings
+            curl -fsSL https://repo.charm.sh/apt/gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/charm.gpg
+            echo "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" | sudo tee /etc/apt/sources.list.d/charm.list
+            sudo apt update && sudo apt install gum || handle_install_failure
+        elif command_exists pacman; then
             echo "Installing Gum using pacman..."
             sudo pacman -S gum || handle_install_failure
         elif command_exists nix-env; then
