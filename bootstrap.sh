@@ -337,7 +337,8 @@ load_from_env_file() {
     fi
 }
 
-load_from_env_file
+
+load_from_env_file "wizard"
 MONIKER=${MONIKER:$(hostname)}
 PRIV_KEY=${PRIV_KEY:-""}
 HUGGINGFACE_API_KEY=${HUGGINGFACE_API_KEY:-""}
@@ -363,7 +364,7 @@ advanced_mode="Advanced Wizardy"
 mode=$(gum choose "$wizard_mode" "$advanced_mode")
 
 if grep -q "$advanced_mode" <<<"$mode"; then
-    load_from_env_file
+    load_from_env_file "advanced"
     echo -e "Current configuration:"
     cat $env_file
     confirm=$(gum confirm "Do you want to run this script with this configuration?")
