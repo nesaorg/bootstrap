@@ -303,16 +303,16 @@ save_to_env_file() {
 
 compose_up() {
     local compose_files
-    compose_files="compose.yml -f compose.agent.yml"
+    compose_files="compose.yml"
 
     if [[ "$node_type" == *"Miner"* ]]; then
         if [[ "$miner_type" == *"Non-Distributed Miner"* ]]; then
-            compose_files+=" -f compose.non-dist.yml"
+            compose_files+=" -f compose.agent.yml -f compose.orchestrator.yml"
         elif [[ "$miner_type" == *"Distributed Miner"* ]]; then
             if [[ "$distributed_type" == *"Start a new swarm"* ]]; then
-                compose_files+=" -f compose.dist-c.yml"
+                compose_files+=" -f compose.agent.yml -f compose.orchestrator.yml -f compose.bsns-c.yml"
             else
-                compose_files+=" -f compose.dist-s.yml"
+                compose_files+=" -f compose.bsns-s.yml"
             fi
         fi
     fi
