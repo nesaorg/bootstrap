@@ -331,7 +331,7 @@ compose_up() {
 load_from_env_file() {
     if [ -f "$env_file" ]; then
         source "$env_file"
-    else
+    elif [ "$1" == "advanced" ]; then
         echo "$env_file does not exist. Please run in wizard mode to create the config file."
         exit 1
     fi
