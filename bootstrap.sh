@@ -32,7 +32,7 @@ logo=$(gum style '   ▄▄▄▄▄▄
   ███   ███')
 
 chain_id="nesa-testnet-3"
-domain=".nesa.sh"
+domain="test.nesa.sh"
 chain_container="9eef1e0f504e"
 # chain_container="ghcr.io/nesaorg/nesachain/nesachain:test"
 
@@ -45,10 +45,14 @@ status="booting"
 init_pwd=$PWD
 
 
-WORKING_DIRECTORY=${WORKING_DIRECTORY:-"$HOME/nesa"}
-env_file="$WORKING_DIRECTORY/.env"
+WORKING_DIRECTORY=${WORKING_DIRECTORY:-"$HOME/.nesa"}
+env_dir="$WORKING_DIRECTORY/env"
 
-
+agent_env_file="$env_dir/agent.env"
+bsns_s_env_file="$env_dir/bsns-s.env"
+orchestrator_env_file="$env_dir/orchestrator.env"
+base_env_file="$env_dir/base.env"
+config_env_file="$env_dir/.env"
 
 
 #
@@ -220,15 +224,15 @@ max_line_length() {
 
 download_import_key_expect() {
     # curl -o import_key.expect "$IMPORT_KEY_EXPECT_URL"
-    # chmod +x "$WORKING_DIRECTORY/import_key.expect"
 
     cp import_key.expect "$WORKING_DIRECTORY/"
+    chmod +x "$WORKING_DIRECTORY/import_key.expect"
+
 }
 
 setup_work_dir() {
     if [ ! -d "$WORKING_DIRECTORY" ]; then
         mkdir -p "$WORKING_DIRECTORY"
-        echo -e "Working directory created at $WORKING_DIRECTORY"
     fi
 
     cd "$WORKING_DIRECTORY" || {
@@ -238,7 +242,6 @@ setup_work_dir() {
 
     download_import_key_expect
 
-
     # Clone or pull the latest changes if the repo already exists
     if [ ! -d "docker" ]; then
         gum spin -s line --title "Cloning the nesaorg/docker repository..." -- git clone https://github.com/nesaorg/docker.git
@@ -247,8 +250,15 @@ setup_work_dir() {
         gum spin -s line --title "Pulling latest updates from nesaorg/docker repository..." -- git pull
         cd ..
     fi
-}
 
+    # Create symlink for env directory
+    if [ -d "docker" ]; then
+        ln -sfn "$env_dir" "docker/env"
+    else
+        echo "Error: Docker directory does not exist."
+        exit 1
+    fi
+}
 
 
 get_swarms_map() {
@@ -288,21 +298,34 @@ get_model_names() {
 }
 
 save_to_env_file() {
-    echo "MONIKER=$MONIKER" > "$env_file"
-    echo "NODE_HOST_NAME=$NODE_HOST_NAME" >> "$env_file"
-    echo "OP_EMAIL=$OP_EMAIL" >> "$env_file"
-    echo "WORKING_DIRECTORY=$WORKING_DIRECTORY" >> "$env_file"
-    echo "PRIV_KEY=$PRIV_KEY" >> "$env_file"
-    echo "CHAIN_ID=$chain_id" >> "$env_file"
-    echo "MODEL_NAME=$MODEL_NAME" >> "$env_file"
-    echo "HUGGINGFACE_API_KEY=$HUGGINGFACE_API_KEY" >> "$env_file"
-    echo "IS_VALIDATOR=$is_validator" >> "$env_file"
-    echo "IS_MINER=$is_miner" >> "$env_file"
-    echo "IS_DIST=$IS_DIST" >> "$env_file"
-    echo "IP_ADDRESS=$IP_ADDRESS" >> "$env_file"
-    echo "INITIAL_PEER=$INITIAL_PEER" >> "$env_file"
+    # Note: Variables might be used in multiple env files, that is okay.
+    # Agent environment variables
+    echo "VIRTUAL_HOST=$NODE_HOSTNAME" > "$agent_env_file"
+    echo "LETSENCRYPT_HOST=$NODE_HOSTNAME" >> "$agent_env_file"
+    echo "LETSENCRYPT_EMAIL=$OP_EMAIL" >> "$agent_env_file"
+    echo "MYSQL_ROOT_PASSWORD=123456" >> "$agent_env_file"
+    echo "MYSQL_DATABASE=agent" >> "$agent_env_file"
+    echo "MYSQL_USER=agent" >> "$agent_env_file"
+    echo "MYSQL_PASSWORD=123456" >> "$agent_env_file"
+    echo "MONIKER=$MONIKER" >> "$agent_env_file"
 
-    echo "config saved to $env_file"
+    # BSNS-S environment variables
+    echo "INITIAL_PEER=$INITIAL_PEER" > "$bsns_s_env_file"
+    echo "MONIKER=$MONIKER" >> "$bsns_s_env_file"
+
+    # Orchestrator environment variables
+    echo "IS_DIST=$IS_DIST" > "$orchestrator_env_file"
+    echo "HUGGINGFACE_API_KEY=$HUGGINGFACE_API_KEY" >> "$orchestrator_env_file"
+    echo "MONIKER=$MONIKER" >> "$orchestrator_env_file"
+
+    # Base environment variables
+    echo "MONIKER=$MONIKER" > "$base_env_file"
+
+    # Config environment variables
+    echo "CHAIN_ID=$chain_id" > "$config_env_file"
+    echo "MODEL_NAME=$MODEL_NAME" >> "$config_env_file"
+    echo "IS_VALIDATOR=$is_validator" >> "$config_env_file"
+    echo "IS_MINER=$is_miner" >> "$config_env_file"
 }
 
 
@@ -335,14 +358,43 @@ compose_up() {
 }
 
 
+
 load_from_env_file() {
-    if [ -f "$env_file" ]; then
-        source "$env_file"
+    if [ -f "$config_env_file" ]; then
+        source "$config_env_file"
     elif [ "$1" == "advanced" ]; then
-        echo "$env_file does not exist. Please run in wizard mode to create the config file."
+        echo "$config_env_file does not exist. Please run in wizard mode to create the config file."
         exit 1
+    else
+        touch "$config_env_file"
+    fi
+
+    if [ -f "$agent_env_file" ]; then
+        source "$agent_env_file"
+    elif [ "$1" != "advanced" ]; then
+        touch "$agent_env_file"
+    fi
+
+    if [ -f "$bsns_s_env_file" ]; then
+        source "$bsns_s_env_file"
+    elif [ "$1" != "advanced" ]; then
+        touch "$bsns_s_env_file"
+    fi
+
+    if [ -f "$orchestrator_env_file" ]; then
+        source "$orchestrator_env_file"
+    elif [ "$1" != "advanced" ]; then
+        touch "$orchestrator_env_file"
+    fi
+
+    if [ -f "$base_env_file" ]; then
+        source "$base_env_file"
+    elif [ "$1" != "advanced" ]; then
+        touch "$base_env_file"
     fi
 }
+
+
 
 
 load_from_env_file "wizard"
