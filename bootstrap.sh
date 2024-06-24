@@ -31,7 +31,7 @@ logo=$(gum style '   ▄▄▄▄▄▄
   ███   ███ 
   ███   ███')
 
-chain_id="nesa-testnet-3"
+CHAIN_ID="nesa-testnet-3"
 domain="test.nesa.sh"
 chain_container="9eef1e0f504e"
 # chain_container="ghcr.io/nesaorg/nesachain/nesachain:test"
@@ -45,6 +45,7 @@ status="booting"
 init_pwd=$PWD
 
 
+# this will never load from the env file, so I need to consider making it not configurable 
 WORKING_DIRECTORY=${WORKING_DIRECTORY:-"$HOME/.nesa"}
 env_dir="$WORKING_DIRECTORY/env"
 
@@ -74,7 +75,7 @@ print_test() {
 }
 
 update_header() {
-    info=$(gum style "[1;38;5;${main_color}m  ${MONIKER}[0m${domain}
+    info=$(gum style "[1;38;5;${main_color}m  ${MONIKER}[0m.${domain}
   ----------------
   [1;38;5;${main_color}maddress:       [0m${address}
   [1;38;5;${main_color}mvalidator:     [0m${is_validator}
@@ -240,7 +241,6 @@ setup_work_dir() {
         exit 1
     }
 
-    download_import_key_expect
 
     # Clone or pull the latest changes if the repo already exists
     if [ ! -d "docker" ]; then
@@ -299,6 +299,14 @@ get_model_names() {
 
 save_to_env_file() {
     # Note: Variables might be used in multiple env files, that is okay.
+    # Config environment variables
+    echo "CHAIN_ID=$CHAIN_ID" > "$config_env_file"
+    echo "MODEL_NAME=$MODEL_NAME" >> "$config_env_file"
+    echo "IS_VALIDATOR=$is_validator" >> "$config_env_file"
+    echo "IS_MINER=$is_miner" >> "$config_env_file"
+    echo "NODE_HOSTNAME=$NODE_HOSTNAME" >> "$config_env_file"
+    echo "OP_EMAIL=$OP_EMAIL" >> "$config_env_file"
+
     # Agent environment variables
     echo "VIRTUAL_HOST=$NODE_HOSTNAME" > "$agent_env_file"
     echo "LETSENCRYPT_HOST=$NODE_HOSTNAME" >> "$agent_env_file"
@@ -321,11 +329,6 @@ save_to_env_file() {
     # Base environment variables
     echo "MONIKER=$MONIKER" > "$base_env_file"
 
-    # Config environment variables
-    echo "CHAIN_ID=$chain_id" > "$config_env_file"
-    echo "MODEL_NAME=$MODEL_NAME" >> "$config_env_file"
-    echo "IS_VALIDATOR=$is_validator" >> "$config_env_file"
-    echo "IS_MINER=$is_miner" >> "$config_env_file"
 }
 
 
@@ -366,6 +369,7 @@ load_from_env_file() {
         echo "$config_env_file does not exist. Please run in wizard mode to create the config file."
         exit 1
     else
+        mkdir -p "$env_dir"
         touch "$config_env_file"
     fi
 
@@ -398,15 +402,13 @@ load_from_env_file() {
 
 
 load_from_env_file "wizard"
-MONIKER=${MONIKER:$(hostname)}
 PRIV_KEY=${PRIV_KEY:-""}
 HUGGINGFACE_API_KEY=${HUGGINGFACE_API_KEY:-""}
 MODEL_NAME=${MODEL_NAME:-""}
-OP_EMAIL=${OP_EMAIL:-""}
+
 
 # don't use cached/saved values for these 
 PUBLIC_IP=$(curl -s ifconfig.me)
-NODE_HOSTNAME="$MONIKER.test.nesa.sh"
 
 #
 # bootstrap core logic
@@ -430,7 +432,8 @@ mode=$(gum choose "$wizard_mode" "$advanced_mode")
 if grep -q "$advanced_mode" <<<"$mode"; then
     load_from_env_file "advanced"
     echo -e "Current configuration:"
-    cat $env_file
+    cat "$config_env_file" "$agent_env_file" "$bsns_s_env_file" "$orchestrator_env_file" "$base_env_file" | sort | uniq
+
     confirm=$(gum confirm "Do you want to run this script with this configuration?")
     if [ "$confirm" != "yes" ]; then
         exit 0
@@ -438,7 +441,7 @@ if grep -q "$advanced_mode" <<<"$mode"; then
 else
 
 
-
+    MONIKER=${MONIKER:$(hostname -s)}
     MONIKER=$(gum input --cursor.foreground "${main_color}" \
         --prompt.foreground "${main_color}" \
         --prompt "Choose a moniker for your node: " \
@@ -448,13 +451,30 @@ else
 
     MONIKER=$(echo "$MONIKER" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 
-
-    WORKING_DIRECTORY=$(gum input --cursor.foreground "${main_color}" \
+    
+    NODE_HOSTNAME=${NODE_HOSTNAME:-"$MONIKER.yourdomain.tld"}
+    NODE_HOSTNAME=$(gum input --cursor.foreground "${main_color}" \
         --prompt.foreground "${main_color}" \
-        --prompt "Choose a working directory: " \
-        --placeholder "$WORKING_DIRECTORY" \
+        --prompt "What will $(gum style --foreground "main_color" "$MONIKER")'s hostname be? " \
+        --placeholder "$NODE_HOSTNAME" \
         --width 80 \
-        --value "$WORKING_DIRECTORY")
+        --value "$NODE_HOSTNAME")
+
+    OP_EMAIL=${OP_EMAIL:-"admin@$NODE_HOSTNAME"}
+    OP_EMAIL=$(gum input --cursor.foreground "${main_color}" \
+        --prompt.foreground "${main_color}" \
+        --prompt "What is the email of the node operator? " \
+        --placeholder "$OP_EMAIL" \
+        --width 80 \
+        --value "$OP_EMAIL")
+ 
+
+    # WORKING_DIRECTORY=$(gum input --cursor.foreground "${main_color}" \
+    #     --prompt.foreground "${main_color}" \
+    #     --prompt "Choose a working directory: " \
+    #     --placeholder "$WORKING_DIRECTORY" \
+    #     --width 80 \
+    #     --value "$WORKING_DIRECTORY")
 
     echo -e "Now, what type(s) of node is $(gum style --foreground "$main_color" "$MONIKER")? (use space to select which type(s)"
 
@@ -481,6 +501,8 @@ else
 
         # echo -e "Please apply to be a $(gum style --foreground "$main_color" "validator") node here: https://forms.gle/3fQQHVJbHqTPpmy58"
 
+        download_import_key_expect
+
         if [ ! -n "$PRIV_KEY" ]; then
             PRIV_KEY=$(gum input --cursor.foreground "${main_color}" \
                 --password \
@@ -497,10 +519,9 @@ else
             docker pull ghcr.io/nesaorg/nesachain/nesachain:test
             docker volume create nesachain-data
 
-            docker run --rm -v nesachain-data:/app/.nesachain -e MONIKER="$MONIKER" -e CHAIN_ID="$chain_id" -p 26656:26656 -p 26657:26657 -p 1317:1317 -p 9090:9090 -p 2345:2345 $chain_container
+            docker run --rm -v nesachain-data:/app/.nesachain -e MONIKER="$MONIKER" -e CHAIN_ID="$CHAIN_ID" -p 26656:26656 -p 26657:26657 -p 1317:1317 -p 9090:9090 -p 2345:2345 $chain_container
 
-            ./import_key.expect "$MONIKER" "$PRIV_KEY" "$chain_container" "$PASSWORD"
-
+            "$WORKING_DIRECTORY/import_key.expect" "$MONIKER" "$PRIV_KEY" "$chain_container" "$PASSWORD"
 
         fi
 
