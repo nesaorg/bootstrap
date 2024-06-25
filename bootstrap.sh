@@ -33,8 +33,7 @@ logo=$(gum style '   ▄▄▄▄▄▄
 
 CHAIN_ID="nesa-testnet-3"
 domain="test.nesa.sh"
-chain_container="9eef1e0f504e"
-# chain_container="ghcr.io/nesaorg/nesachain/nesachain:test"
+chain_container="ghcr.io/nesaorg/nesachain:testnet-latest"
 
 import_key_expect_url="https://raw.githubusercontent.com/nesaorg/bootstrap/master/import_key.expect"
 
@@ -45,7 +44,7 @@ status="booting"
 init_pwd=$PWD
 
 
-# this will never load from the env file, so I need to consider making it not configurable 
+# this will never load from the env file, but if they know to override it via ENV vars then they can
 WORKING_DIRECTORY=${WORKING_DIRECTORY:-"$HOME/.nesa"}
 env_dir="$WORKING_DIRECTORY/env"
 
@@ -60,7 +59,7 @@ config_env_file="$env_dir/.env"
 # basic helper functions
 #
 
-# print if the output fi ts on screen
+# print if the output if ts on screen
 print_test() {
     local no_color
     local max_length
@@ -310,12 +309,11 @@ save_to_env_file() {
     # Agent environment variables
     echo "VIRTUAL_HOST=$NODE_HOSTNAME" > "$agent_env_file"
     echo "LETSENCRYPT_HOST=$NODE_HOSTNAME" >> "$agent_env_file"
-    echo "LETSENCRYPT_EMAIL=$OP_EMAIL" >> "$agent_env_file"
-    echo "MYSQL_ROOT_PASSWORD=123456" >> "$agent_env_file"
-    echo "MYSQL_DATABASE=agent" >> "$agent_env_file"
-    echo "MYSQL_USER=agent" >> "$agent_env_file"
-    echo "MYSQL_PASSWORD=123456" >> "$agent_env_file"
-    echo "MONIKER=$MONIKER" >> "$agent_env_file"
+    echo "LETSENCRYPT_EMAIL=$OP_EMAIL" >> "$agent_env_file"K
+    echo "CHAIN_ID=$CHAIN_ID" > "$config_env_file"
+    echo "NODE_HOSTNAME=$NODE_HOSTNAME" >> "$agent_env_file"
+    echo "MODEL_NAME=$MODEL_NAME" >> "$config_env_file"
+    echo "NODE_PRIV_KEY=$NODE_PRIV_KEY" >> "$agent_env_file"
 
     # BSNS-S environment variables
     echo "INITIAL_PEER=$INITIAL_PEER" > "$bsns_s_env_file"
@@ -429,6 +427,9 @@ advanced_mode="Advanced Wizardy"
 
 mode=$(gum choose "$wizard_mode" "$advanced_mode")
 
+clear
+update_header
+
 if grep -q "$advanced_mode" <<<"$mode"; then
     load_from_env_file "advanced"
     echo -e "Current configuration:"
@@ -451,6 +452,8 @@ else
 
     MONIKER=$(echo "$MONIKER" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 
+    clear
+    update_header
     
     NODE_HOSTNAME=${NODE_HOSTNAME:-"$MONIKER.yourdomain.tld"}
     NODE_HOSTNAME=$(gum input --cursor.foreground "${main_color}" \
@@ -460,6 +463,9 @@ else
         --width 80 \
         --value "$NODE_HOSTNAME")
 
+    clear
+    update_header
+
     OP_EMAIL=${OP_EMAIL:-"admin@$NODE_HOSTNAME"}
     OP_EMAIL=$(gum input --cursor.foreground "${main_color}" \
         --prompt.foreground "${main_color}" \
@@ -467,35 +473,26 @@ else
         --placeholder "$OP_EMAIL" \
         --width 80 \
         --value "$OP_EMAIL")
- 
 
-    # WORKING_DIRECTORY=$(gum input --cursor.foreground "${main_color}" \
-    #     --prompt.foreground "${main_color}" \
-    #     --prompt "Choose a working directory: " \
-    #     --placeholder "$WORKING_DIRECTORY" \
-    #     --width 80 \
-    #     --value "$WORKING_DIRECTORY")
+    clear
+    update_header
 
     echo -e "Now, what type(s) of node is $(gum style --foreground "$main_color" "$MONIKER")? (use space to select which type(s)"
 
     validator_string="Validator"
-    # orchestrator_string="Orchestrator"
     miner_string="Miner"
 
-    # NODE_TYPE=$(gum choose --no-limit "$validator_string" "$orchestrator_string" "$miner_string")
     node_type=$(gum choose --no-limit "$validator_string" "$miner_string")
 
     grep -q "$validator_string" <<<"$node_type" && is_validator="pending"
-    # grep -q "$orchestrator_string" <<<"$NODE_TYPE" && is_orchestrator="pending"
     grep -q "$miner_string" <<<"$node_type" && is_miner="pending"
 
     clear
     update_header
 
-    export MONIKER WORKING_DIRECTORY
-
     gum spin -s line --title "Setting up working directory and cloning node repository..." -- setup_work_dir
     setup_work_dir
+
 
     if grep -q "$validator_string" <<<"$node_type"; then
 
@@ -552,17 +549,33 @@ else
         ehco "sending tx from $MONIKER"
         docker run --rm --entrypoint nesad -v nesachain-data:/app/.nesachain $chain_container tx staking create-validator /app/.nesachain/validator.json --from "$MONIKER" --chain-id "$CHAIN_ID" --gas auto --gas-adjustment 1.5 --node https://rpc.test.nesa.ai
   
-
-
-        # docker run --entrypoint nesad \
-        #         -e MONIKER="$MONIKER" \
-        #         -e PRIV_KEY="$PRIV_KEY" \
-        #         -v nesachain-data:/app/.nesachain/ \
-        #         "$chain_container" \
-        #         tx poa create-validator validator.json --from="$MONIKER" --chain-id="$chain_id" --keyring-backend="test" --gas auto --gas-adjustment 1.5 
     fi
 
-    if grep -q "$miner_string" <<<"$node_type"; then
+    if grep -q "$miner_string" <<<"$node_type"; then        
+        clear
+        update_header 
+        
+        prompt_for_node_pk=0
+
+        if [ -n "$NODE_PRIV_KEY" ]; then
+            pk_confirm=$(gum confirm "Do you want to use the existing private key? ")
+            if [ "$pk_confirm" != "yes" ]; then
+                prompt_for_node_pk=1
+            fi
+        else
+            prompt_for_node_pk=1
+        fi
+        
+        if [ "$prompt_for_node_pk" -eq 1 ]; then
+            NODE_PRIV_KEY=$(gum input --cursor.foreground "${main_color}" \
+                --password \
+                --prompt.foreground "${main_color}" \
+                --prompt "Node's wallet private key: " \
+                --width 80)
+        fi
+
+        clear
+        update_header
 
         echo -e "Now, what type of miner will $(gum style --foreground "$main_color" "$MONIKER") be?"
         distributed_string="Distributed Miner"
@@ -571,8 +584,13 @@ else
         miner_type=$(gum choose "$distributed_string" "$non_distributed_string")
 
 
+        clear
+        update_header
+
         if grep -q "$miner_type" <<<"$distributed_string"; then
             IS_DIST=True
+
+            
             echo -e "Would you like to join an existing $(gum style --foreground "$main_color" "swarm") or start a new one?"
             existing_swarm="Join existing swarm"
             new_swarm="Start a new swarm"
@@ -599,16 +617,7 @@ else
                         "
                 )
 
-                # here I need to save the model name to an environment variable/config, and then spin up the orchestrator
-                # which will read the model it wants to load from the env variable.
-                # note: it's important that the orchestrator reads the model from the env and then registers itself on chain for that model.
-                # otherwise nobody will ever connect to
-
-            else # existing swarm
-                # I need to query the blockchain to get the list of models that currently have swarms they can join
-                # and then it needs to allow them to select one using gum choose (assuming there aren't too many options)
-                # then whichever one they choose I can take the address of that swarm's agent and build the orchestrator address 
-                # and set it to an environment variable so the new block miner can connect to the desired swarm
+            else 
                 swarms_map=$(get_swarms_map)
                 model_names=$(get_model_names "$swarms_map")
                 echo -e "Which existing $(gum style --foreground "$main_color" "swarm") would you like to join?"
@@ -625,7 +634,9 @@ else
                     --width 80 \
                     --value "$MODEL_NAME"
             )
-
+            
+            clear
+            update_header
             HUGGINGFACE_API_KEY=$(
                 gum input --cursor.foreground "${main_color}" \
                     --prompt.foreground "${main_color}" \
@@ -639,18 +650,13 @@ else
     save_to_env_file
 fi
 
-# when the configuration is all said and done we need to make sure to expore the variables that need to be passed down and/or saved
-# for any future runs
-
-# finally we spin up the docker compose for all of the containers that are needed based on the config
-
-cd "$WORKING_DIRECTORY/docker"
-
-# Temp while testing
-# docker run --rm -v nesachain-data:/app/.nesachain -p 26656:26656 -p 26657:26657 -p 1317:1317 -p 9090:9090 -p 2345:2345 -d "$chain_container"
+cd "$WORKING_DIRECTORY/docker" || {
+    echo -e "Error changing to working directory: $WORKING_DIRECTORY/docker"
+    exit 1
+}
 
 compose_up
-cd "$init_pwd"
+cd "$init_pwd" || return
 
 echo -e "Congratulations! Your $(gum style --foreground "$main_color" "nesa") node was successfully bootstrapped!"
 # set +x
