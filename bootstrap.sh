@@ -348,7 +348,9 @@ compose_up() {
     fi
 
     echo "Using compose files: $compose_files"
-    gum spin -s line --title "Starting Docker Compose..." -- docker compose -f $compose_files up -d --wait
+    
+    # gum spin -s line --title "Starting Docker Compose..." --
+    docker compose -f "$compose_files" up -d --wait
 
     if [[ $? -ne 0 ]]; then
         echo "Error: Docker Compose failed to start."
@@ -561,6 +563,7 @@ else
             pk_confirm=$(gum confirm "Do you want to use the existing private key? ")
             if [ "$pk_confirm" != "yes" ]; then
                 prompt_for_node_pk=1
+
             fi
         else
             prompt_for_node_pk=1
@@ -629,8 +632,8 @@ else
             MODEL_NAME=$(
                 gum input --cursor.foreground "${main_color}" \
                     --prompt.foreground "${main_color}" \
-                    --prompt "Which model would you like to run? ()" \
-                    --placeholder "$MODEL_NAME" \
+                    --prompt "Which model would you like to run?" \
+                    --placeholder "nlptown/bert-base-multilingual-uncased-sentiment" \
                     --width 80 \
                     --value "$MODEL_NAME"
             )
