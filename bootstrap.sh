@@ -388,7 +388,7 @@ compose_up() {
     echo "Using compose files: $compose_files"
     
     # gum spin -s line --title "Starting Docker Compose..." --
-    docker compose -f "$compose_files" up -d --wait
+    docker compose -f $compose_files up -d --wait
 
     if [[ $? -ne 0 ]]; then
         echo "Error: Docker Compose failed to start."
