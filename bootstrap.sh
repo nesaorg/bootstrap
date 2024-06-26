@@ -260,41 +260,79 @@ setup_work_dir() {
 }
 
 
+
 get_swarms_map() {
-    local url="https://lcd.test.nesa.ai/agent/v1/inference_agent_model"
+    local url="https://lcd.test.nesa.ai/nesachain/dht/get_orchestrators"
     local json_data
     local map=()
 
-    # Fetch JSON data
     json_data=$(curl -s "$url")
 
-    # Parse JSON and build the map using jq
+    # filtering out malformed orchestrators
     map=$(echo "$json_data" | jq -r '
-        .model_agents | 
+        .orchestrators |
+        map(select(.node_id | (contains("/") | not))) |
         map(
             {
-                (.model_name): (.inference_agents | map(.url | sub("^wss://"; "")))
+                "node_id": (.node_id | split("|")[0]),
+                "model_id": ((.node_id | split("|")[1]) + "/" + (.node_id | split("|")[2])),
             }
-        ) | 
-        add
+        )
     ')
 
     echo "$map"
 }
 
-
-
-
-
-# Function to get the list of model names from the map
 get_model_names() {
     local map="$1"
     local model_names
 
-    model_names=$(echo "$map" | jq -r 'keys | .[]')
+    model_names=$(echo "$map" | jq -r '.[] | .model_id' | sort | uniq)
 
     echo "$model_names"
 }
+
+get_node_id() {
+    local map="$1"
+    local model_id="$2"
+    local node_id
+
+    node_id=$(echo "$map" | jq -r --arg model_id "$model_id" '
+        .[] | select(.model_id == $model_id) | .node_id
+    ')
+
+    echo "$node_id"
+}
+
+# this is temporary, once DHT is updated we can stop doing this
+recreate_node_id() {
+    local map="$1"
+    local model_id="$2"
+    local node_info
+
+    node_info=$(echo "$map" | jq -r --arg model_id "$model_id" '
+        .[] | select(.model_id == $model_id) | "\(.node_id)|\(.organization)|\(.model_name)"
+    ')
+
+    echo "$node_info"
+}
+
+fetch_network_address() {
+    local node_id="$1"
+    local url="https://lcd.test.nesa.ai/nesachain/dht/get_node/$node_id"
+    local json_data
+    local network_address
+
+    # Fetch JSON data
+    json_data=$(curl -s "$url")
+
+    # Parse JSON to get the network address
+    network_address=$(echo "$json_data" | jq -r '.node.network_address')
+
+    echo "$network_address"
+}
+
+
 
 save_to_env_file() {
     # Note: Variables might be used in multiple env files, that is okay.
@@ -314,7 +352,6 @@ save_to_env_file() {
     echo "NODE_HOSTNAME=$NODE_HOSTNAME" >> "$agent_env_file"
     echo "MODEL_NAME=$MODEL_NAME" >> "$config_env_file"
     echo "NODE_PRIV_KEY=$NODE_PRIV_KEY" >> "$agent_env_file"
-
     # BSNS-S environment variables
     echo "INITIAL_PEER=$INITIAL_PEER" > "$bsns_s_env_file"
     echo "MONIKER=$MONIKER" >> "$bsns_s_env_file"
@@ -326,6 +363,7 @@ save_to_env_file() {
 
     # Base environment variables
     echo "MONIKER=$MONIKER" > "$base_env_file"
+    echo "CHAIN_ID=$CHAIN_ID" > "$config_env_file"
 
 }
 
@@ -417,7 +455,7 @@ PUBLIC_IP=$(curl -s ifconfig.me)
 # deps
 check_gum_installed
 check_docker_installed
-# check_jq_installed
+check_jq_installed
 
 clear
 update_header
@@ -625,6 +663,13 @@ else
                 model_names=$(get_model_names "$swarms_map")
                 echo -e "Which existing $(gum style --foreground "$main_color" "swarm") would you like to join?"
                 MODEL_NAME=$(echo "$model_names" | gum choose --no-limit)
+                INITIAL_PEER_ID=$(recreate_node_id "$swarms_map" "$MODEL_NAME")
+                INITIAL_PEER_ADDRESS=$(fetch_network_address "$INITIAL_PEER_ID") 
+
+                INITIAL_PEER="ip4/$INITIAL_PEER_ADDRESS/tcp/31330/p2p/$INITIAL_PEER_ID"
+                
+                echo "Initial peer address: $INITIAL_PEER_ADDRESS" 
+
             fi
 
         else # non-distributed setup
