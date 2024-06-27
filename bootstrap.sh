@@ -612,14 +612,13 @@ else
     if grep -q "$miner_string" <<<"$node_type"; then        
         clear
         update_header 
-        
+
         prompt_for_node_pk=0
 
         if [ -n "$NODE_PRIV_KEY" ]; then
             pk_confirm=$(gum confirm "Do you want to use the existing private key? ")
-            if [ "$pk_confirm" != "yes" ]; then
+            if ! $pk_confirm; then
                 prompt_for_node_pk=1
-
             fi
         else
             prompt_for_node_pk=1
