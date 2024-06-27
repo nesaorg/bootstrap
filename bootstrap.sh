@@ -507,7 +507,7 @@ if grep -q "$advanced_mode" <<<"$mode"; then
 else
 
 
-    MONIKER=${MONIKER:$(hostname -s)}
+    MONIKER=${MONIKER:-$(hostname -s)}
     MONIKER=$(gum input --cursor.foreground "${main_color}" \
         --prompt.foreground "${main_color}" \
         --prompt "Choose a moniker for your node: " \
@@ -611,7 +611,6 @@ else
             cat /app/.nesachain/validator.json
         '
 
-        ehco "sending tx from $MONIKER"
         docker run --rm --entrypoint nesad -v nesachain-data:/app/.nesachain $chain_container tx staking create-validator /app/.nesachain/validator.json --from "$MONIKER" --chain-id "$CHAIN_ID" --gas auto --gas-adjustment 1.5 --node https://rpc.test.nesa.ai
   
     fi
@@ -709,8 +708,7 @@ else
                 --prompt "Please provide your Huggingface API key: " \
                 --placeholder "$HUGGINGFACE_API_KEY" \
                 --width 120 \
-                --value "$HUGGINGFACE_API_KEY
-                "
+                --value "$HUGGINGFACE_API_KEY"
             )
     fi
     save_to_env_file
