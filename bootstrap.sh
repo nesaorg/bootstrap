@@ -260,23 +260,37 @@ setup_work_dir() {
     fi
 }
 
-
-
 get_swarms_map() {
     local url="https://lcd.test.nesa.ai/nesachain/dht/get_orchestrators"
     local json_data
+    local excluded_node_ids
+    local exclude_node_ids_json 
     local map=()
+
+    excluded_node_ids=(
+    "QmbtSFavybyKNkP2MAhVftA4S7tAW5HXvbKGiX9hHx9XqF|mistralai|Mixtral-8x7B-Instruct-v0.1" 
+    "QmR58ndfebR3LXNxT5qx3FgXMkb4AptjpDM83r1CXfAhAw|mistralai|Mixtral-8x7B-Instruct-v0.1"
+    "Qmc6GZVS41EzzU5j13cy1pL3HjhwJfaf1N71cjp2zt18HX|Orenguteng|Llama-3-8B-Lexi-Uncensored" 
+    "QmR4Gi37D1cPnihhkvRG9kRGtBtXYxwAYo92x6y1FYxmij|bigscience|bloom-560m"
+    "QmeCvBP1N3BqDiQc7hGxNFgrtguVHncqGKChJJeMZtsM8C|randommodel"
+    "QmUxwnuEKAEY9CnB4tEPKvmwK6h6pmuSN3V28vQ9A3s8qQ|randommodel22"
+    )
+
+    exclude_node_ids_json=$(printf '%s\n' "${excluded_node_ids[@]}" | jq -R . | jq -s .)
 
     json_data=$(curl -s "$url")
 
-    # filtering out malformed orchestrators
-    map=$(echo "$json_data" | jq -r '
+    
+    map=$(echo "$json_data" | jq -r --argjson exclude_node_ids "$exclude_node_ids_json" '
         .orchestrators |
         map(select(.node_id | (contains("/") | not))) |
+        map(select(.node_id as $id | $exclude_node_ids | index($id) | not)) |
         map(
             {
                 "node_id": (.node_id | split("|")[0]),
-                "model_id": ((.node_id | split("|")[1]) + "/" + (.node_id | split("|")[2])),
+                "organization": (.node_id | split("|")[1]),
+                "model_name": (.node_id | split("|")[2]),
+                "model_id": ((.node_id | split("|")[1]) + "/" + (.node_id | split("|")[2]))
             }
         )
     ')
@@ -296,8 +310,8 @@ get_model_names() {
 get_node_id() {
     local map="$1"
     local model_id="$2"
-    local node_id
 
+    local node_id
     node_id=$(echo "$map" | jq -r --arg model_id "$model_id" '
         .[] | select(.model_id == $model_id) | .node_id
     ')
@@ -305,12 +319,11 @@ get_node_id() {
     echo "$node_id"
 }
 
-# this is temporary, once DHT is updated we can stop doing this
-recreate_node_id() {
+create_combined_node_id() {
     local map="$1"
     local model_id="$2"
-    local node_info
 
+    local node_info
     node_info=$(echo "$map" | jq -r --arg model_id "$model_id" '
         .[] | select(.model_id == $model_id) | "\(.node_id)|\(.organization)|\(.model_name)"
     ')
@@ -319,15 +332,12 @@ recreate_node_id() {
 }
 
 fetch_network_address() {
-    local node_id="$1"
-    local url="https://lcd.test.nesa.ai/nesachain/dht/get_node/$node_id"
+    local recreated_node_id="$1"
+    local url="https://lcd.test.nesa.ai/nesachain/dht/get_node/$recreated_node_id"
     local json_data
     local network_address
 
-    # Fetch JSON data
     json_data=$(curl -s "$url")
-
-    # Parse JSON to get the network address
     network_address=$(echo "$json_data" | jq -r '.node.network_address')
 
     echo "$network_address"
@@ -671,10 +681,11 @@ else
                 model_names=$(get_model_names "$swarms_map")
                 echo -e "Which existing $(gum style --foreground "$main_color" "swarm") would you like to join?"
                 MODEL_NAME=$(echo "$model_names" | gum choose --no-limit)
-                INITIAL_PEER_ID=$(recreate_node_id "$swarms_map" "$MODEL_NAME")
-                INITIAL_PEER_ADDRESS=$(fetch_network_address "$INITIAL_PEER_ID") 
+                initial_peer_id=$(get_node_id "$swarms_map" "$MODEL_NAME") 
 
-                INITIAL_PEER="/ip4/$INITIAL_PEER_ADDRESS/tcp/31330/p2p/$INITIAL_PEER_ID"
+                node_lookup_id=$(create_combined_node_id "$swarms_map" "$MODEL_NAME")
+                initial_peer_ip=$(fetch_network_address "$node_lookup_id") 
+                INITIAL_PEER="/ip4/$initial_peer_ip/tcp/31330/p2p/$initial_peer_id"
                 
                 echo "Initial peer address: $INITIAL_PEER_ADDRESS" 
 
