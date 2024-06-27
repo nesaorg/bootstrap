@@ -347,16 +347,23 @@ save_to_env_file() {
     # Agent environment variables
     echo "VIRTUAL_HOST=$NODE_HOSTNAME" > "$agent_env_file"
     echo "LETSENCRYPT_HOST=$NODE_HOSTNAME" >> "$agent_env_file"
-    echo "LETSENCRYPT_EMAIL=$OP_EMAIL" >> "$agent_env_file"K
-    echo "CHAIN_ID=$CHAIN_ID" > "$config_env_file"
+    echo "LETSENCRYPT_EMAIL=$OP_EMAIL" >> "$agent_env_file"
+    echo "CHAIN_ID=$CHAIN_ID" > "$agent_env_file"
     echo "NODE_HOSTNAME=$NODE_HOSTNAME" >> "$agent_env_file"
-    echo "MODEL_NAME=$MODEL_NAME" >> "$config_env_file"
+    echo "MODEL_NAME=$MODEL_NAME" >> "$agent_env_file"
     echo "NODE_PRIV_KEY=$NODE_PRIV_KEY" >> "$agent_env_file"
-    # BSNS-S environment variables
+    
+    #bsns-s
+    echo "MODEL_NAME=$MODEL_NAME" >> "$bsns_s_env_file"
     echo "INITIAL_PEER=$INITIAL_PEER" > "$bsns_s_env_file"
-    echo "NODE_PRIV_KEY=$NODE_PRIV_KEY" >> "$agent_env_file"
-    echo "MODEL_NAME=$MODEL_NAME" >> "$config_env_file"
+    echo "NODE_PRIV_KEY=$NODE_PRIV_KEY" >> "$bsns_s_env_file"
     echo "PUBLIC_IP=$PUBLIC_IP" >> "$bsns_s_env_file"
+    echo "HUGGINGFACE_API_KEY=$HUGGINGFACE_API_KEY" >> "$bsns_s_env_file"
+
+    #bsns-c
+    echo "MODEL_NAME=$MODEL_NAME" >> "$bsns_c_env_file"
+    echo "PUBLIC_IP=$PUBLIC_IP" >> "$bsns_c_env_file"
+    echo "NODE_PRIV_KEY=$NODE_PRIV_KEY" >> "$bsns_c_env_file"
 
 
     # Orchestrator environment variables
@@ -366,7 +373,7 @@ save_to_env_file() {
 
     # Base environment variables
     echo "MONIKER=$MONIKER" > "$base_env_file"
-    echo "CHAIN_ID=$CHAIN_ID" > "$config_env_file"
+    echo "CHAIN_ID=$CHAIN_ID" > "$base_env_file"
 
 }
 
