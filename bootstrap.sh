@@ -348,25 +348,22 @@ fetch_network_address() {
 save_to_env_file() {
     # Note: Variables might be used in multiple env files, that is okay.
     # Config environment variables
-    echo "CHAIN_ID=$CHAIN_ID" > "$config_env_file"
-    echo "MODEL_NAME=$MODEL_NAME" >> "$config_env_file"
     echo "IS_VALIDATOR=$is_validator" >> "$config_env_file"
     echo "IS_MINER=$is_miner" >> "$config_env_file"
-    echo "NODE_HOSTNAME=$NODE_HOSTNAME" >> "$config_env_file"
     echo "OP_EMAIL=$OP_EMAIL" >> "$config_env_file"
 
     # Agent environment variables
-    echo "VIRTUAL_HOST=$NODE_HOSTNAME" > "$agent_env_file"
+    echo "VIRTUAL_HOST=$NODE_HOSTNAME" >> "$agent_env_file"
     echo "LETSENCRYPT_HOST=$NODE_HOSTNAME" >> "$agent_env_file"
     echo "LETSENCRYPT_EMAIL=$OP_EMAIL" >> "$agent_env_file"
-    echo "CHAIN_ID=$CHAIN_ID" > "$agent_env_file"
+    echo "CHAIN_ID=$CHAIN_ID" >> "$agent_env_file"
     echo "NODE_HOSTNAME=$NODE_HOSTNAME" >> "$agent_env_file"
     echo "MODEL_NAME=$MODEL_NAME" >> "$agent_env_file"
     echo "NODE_PRIV_KEY=$NODE_PRIV_KEY" >> "$agent_env_file"
     
     #bsns-s
     echo "MODEL_NAME=$MODEL_NAME" >> "$bsns_s_env_file"
-    echo "INITIAL_PEER=$INITIAL_PEER" > "$bsns_s_env_file"
+    echo "INITIAL_PEER=$INITIAL_PEER" >> "$bsns_s_env_file"
     echo "NODE_PRIV_KEY=$NODE_PRIV_KEY" >> "$bsns_s_env_file"
     echo "PUBLIC_IP=$PUBLIC_IP" >> "$bsns_s_env_file"
     echo "HUGGINGFACE_API_KEY=$HUGGINGFACE_API_KEY" >> "$bsns_s_env_file"
@@ -378,14 +375,14 @@ save_to_env_file() {
 
 
     # Orchestrator environment variables
-    echo "IS_DIST=$IS_DIST" > "$orchestrator_env_file"
+    echo "IS_DIST=$IS_DIST" >> "$orchestrator_env_file"
     echo "HUGGINGFACE_API_KEY=$HUGGINGFACE_API_KEY" >> "$orchestrator_env_file"
     echo "MONIKER=$MONIKER" >> "$orchestrator_env_file"
-    echo "INITIAL_PEER=$INITIAL_PEER" > "$orchestrator_env_file"
+    echo "INITIAL_PEER=$INITIAL_PEER" >> "$orchestrator_env_file"
 
     # Base environment variables
-    echo "MONIKER=$MONIKER" > "$base_env_file"
-    echo "CHAIN_ID=$CHAIN_ID" > "$base_env_file"
+    echo "MONIKER=$MONIKER" >> "$base_env_file"
+    echo "CHAIN_ID=$CHAIN_ID" >> "$base_env_file"
 
 }
 
