@@ -402,10 +402,8 @@ compose_up() {
                 compose_files+=" -f compose.bsns-s.yml"
             fi
         fi
-    fi
+    fi 
 
-    echo "Using compose files: $compose_files"
-    
     # gum spin -s line --title "Starting Docker Compose..." --
     docker compose -f $compose_files up -d --wait
 
