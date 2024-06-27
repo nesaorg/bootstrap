@@ -354,7 +354,10 @@ save_to_env_file() {
     echo "NODE_PRIV_KEY=$NODE_PRIV_KEY" >> "$agent_env_file"
     # BSNS-S environment variables
     echo "INITIAL_PEER=$INITIAL_PEER" > "$bsns_s_env_file"
-    echo "MONIKER=$MONIKER" >> "$bsns_s_env_file"
+    echo "NODE_PRIV_KEY=$NODE_PRIV_KEY" >> "$agent_env_file"
+    echo "MODEL_NAME=$MODEL_NAME" >> "$config_env_file"
+    echo "PUBLIC_IP=$PUBLIC_IP" >> "$bsns_s_env_file"
+
 
     # Orchestrator environment variables
     echo "IS_DIST=$IS_DIST" > "$orchestrator_env_file"
