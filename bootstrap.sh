@@ -570,6 +570,8 @@ else
                 --prompt "Validator's private key: " \
                 --width 80)
 
+            clear
+            update_header
             PASSWORD=$(gum input --cursor.foreground "${main_color}" \
                 --password \
                 --prompt.foreground "${main_color}" \
@@ -659,6 +661,9 @@ else
 
             distributed_type=$(gum choose "$existing_swarm" "$new_swarm")
 
+            clear
+            update_header
+
             if grep -q "$distributed_type" <<<"$new_swarm"; then
                 MODEL_NAME=$(
                     gum input --cursor.foreground "${main_color}" \
@@ -695,18 +700,21 @@ else
                     --value "$MODEL_NAME"
             )
             
-            clear
-            update_header
+    
         fi
+        clear
+        update_header
     
         HUGGINGFACE_API_KEY=$(
             gum input --cursor.foreground "${main_color}" \
                 --prompt.foreground "${main_color}" \
                 --prompt "Please provide your Huggingface API key: " \
+                --password \
                 --placeholder "$HUGGINGFACE_API_KEY" \
                 --width 120 \
                 --value "$HUGGINGFACE_API_KEY"
             )
+        
     fi
     save_to_env_file
 fi
@@ -716,6 +724,8 @@ cd "$WORKING_DIRECTORY/docker" || {
     exit 1
 }
 
+clear
+update_header
 compose_up
 cd "$init_pwd" || return
 
