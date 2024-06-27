@@ -665,15 +665,6 @@ else
                         --value "$MODEL_NAME"
                 )
 
-                HUGGINGFACE_API_KEY=$(
-                    gum input --cursor.foreground "${main_color}" \
-                        --prompt.foreground "${main_color}" \
-                        --prompt "Please provide your Huggingface API key: " \
-                        --placeholder "$HUGGINGFACE_API_KEY" \
-                        --width 80 \
-                        --value "$HUGGINGFACE_API_KEY
-                        "
-                )
 
             else 
                 swarms_map=$(get_swarms_map)
@@ -683,7 +674,7 @@ else
                 INITIAL_PEER_ID=$(recreate_node_id "$swarms_map" "$MODEL_NAME")
                 INITIAL_PEER_ADDRESS=$(fetch_network_address "$INITIAL_PEER_ID") 
 
-                INITIAL_PEER="ip4/$INITIAL_PEER_ADDRESS/tcp/31330/p2p/$INITIAL_PEER_ID"
+                INITIAL_PEER="/ip4/$INITIAL_PEER_ADDRESS/tcp/31330/p2p/$INITIAL_PEER_ID"
                 
                 echo "Initial peer address: $INITIAL_PEER_ADDRESS" 
 
@@ -702,15 +693,17 @@ else
             
             clear
             update_header
-            HUGGINGFACE_API_KEY=$(
-                gum input --cursor.foreground "${main_color}" \
-                    --prompt.foreground "${main_color}" \
-                    --prompt "Please provide your Huggingface API key:" \
-                    --placeholder "$MODEL_NAME" \
-                    --width 80 \
-                    --value "$MODEL_NAME"
-            )
         fi
+    
+        HUGGINGFACE_API_KEY=$(
+            gum input --cursor.foreground "${main_color}" \
+                --prompt.foreground "${main_color}" \
+                --prompt "Please provide your Huggingface API key: " \
+                --placeholder "$HUGGINGFACE_API_KEY" \
+                --width 120 \
+                --value "$HUGGINGFACE_API_KEY
+                "
+            )
     fi
     save_to_env_file
 fi
