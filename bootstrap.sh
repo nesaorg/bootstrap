@@ -677,12 +677,10 @@ else
                 MODEL_NAME=$(echo "$model_names" | gum choose)
 
                 initial_peer_id=$(get_node_id "$swarms_map" "$MODEL_NAME") 
-
                 node_lookup_id=$(create_combined_node_id "$swarms_map" "$MODEL_NAME")
                 initial_peer_ip=$(fetch_network_address "$node_lookup_id") 
-                INITIAL_PEER="/ip4/$initial_peer_ip/tcp/31330/p2p/$initial_peer_id"
-                
-                echo "Initial peer address: $INITIAL_PEER_ADDRESS" 
+
+                INITIAL_PEER="/ip4/$initial_peer_ip/tcp/31330/p2p/$initial_peer_id"                
 
             fi
 
