@@ -50,6 +50,7 @@ env_dir="$WORKING_DIRECTORY/env"
 
 agent_env_file="$env_dir/agent.env"
 bsns_s_env_file="$env_dir/bsns-s.env"
+bsns_c_env_file="$env_dir/bsns-c.env"
 orchestrator_env_file="$env_dir/orchestrator.env"
 base_env_file="$env_dir/base.env"
 config_env_file="$env_dir/.env"
@@ -370,6 +371,7 @@ save_to_env_file() {
     echo "IS_DIST=$IS_DIST" > "$orchestrator_env_file"
     echo "HUGGINGFACE_API_KEY=$HUGGINGFACE_API_KEY" >> "$orchestrator_env_file"
     echo "MONIKER=$MONIKER" >> "$orchestrator_env_file"
+    echo "INITIAL_PEER=$INITIAL_PEER" > "$orchestrator_env_file"
 
     # Base environment variables
     echo "MONIKER=$MONIKER" > "$base_env_file"
@@ -433,6 +435,12 @@ load_from_env_file() {
         touch "$bsns_s_env_file"
     fi
 
+    if [ -f "$bsns_c_env_file" ]; then
+        source "$bsns_c_env_file"
+    elif [ "$1" != "advanced" ]; then
+        touch "$bsns_c_env_file"
+    fi
+
     if [ -f "$orchestrator_env_file" ]; then
         source "$orchestrator_env_file"
     elif [ "$1" != "advanced" ]; then
@@ -483,7 +491,7 @@ update_header
 if grep -q "$advanced_mode" <<<"$mode"; then
     load_from_env_file "advanced"
     echo -e "Current configuration:"
-    cat "$config_env_file" "$agent_env_file" "$bsns_s_env_file" "$orchestrator_env_file" "$base_env_file" | sort | uniq
+    cat "$config_env_file" "$agent_env_file" "$bsns_c_env_file" "$bsns_s_env_file" "$orchestrator_env_file" "$base_env_file" | sort | uniq
 
     confirm=$(gum confirm "Do you want to run this script with this configuration?")
     if [ "$confirm" != "yes" ]; then
