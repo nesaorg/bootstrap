@@ -11,7 +11,7 @@
 #   bootstrap.sh      fielding@nesa.ai 
 #
 #
-#                       
+#   noteworthy conventions: variables that are exported to the config file or the container environment files are in all caps
 
 #
 # vars
@@ -33,16 +33,16 @@ logo=$(gum style '   ▄▄▄▄▄▄
 
 CHAIN_ID="nesa-testnet-3"
 domain="test.nesa.sh"
+
 chain_container="ghcr.io/nesaorg/nesachain:testnet-latest"
-
 import_key_expect_url="https://raw.githubusercontent.com/nesaorg/bootstrap/master/import_key.expect"
+miner_type_none=0
+miner_type_non_distributed=1
+miner_type_distributed=2
 
-address="pending"
-is_validator="no"
-is_miner="no"
-status="booting"
-init_pwd=$PWD
-
+distributed_type_none=0
+distributed_type_new_swarm=1
+distributed_type_existing_swarm=2
 
 # this will never load from the env file, but if they know to override it via ENV vars then they can
 WORKING_DIRECTORY=${WORKING_DIRECTORY:-"$HOME/.nesa"}
@@ -55,6 +55,9 @@ orchestrator_env_file="$env_dir/orchestrator.env"
 base_env_file="$env_dir/base.env"
 config_env_file="$env_dir/.env"
 
+init_pwd=$PWD # so they can get back to where they started!
+
+status="booting" # lol not really doing anything with this currently
 
 #
 # basic helper functions
@@ -77,10 +80,11 @@ print_test() {
 update_header() {
     info=$(gum style "[1;38;5;${main_color}m  ${MONIKER}[0m.${domain}
   ----------------
-  [1;38;5;${main_color}maddress:       [0m${address}
-  [1;38;5;${main_color}mvalidator:     [0m${is_validator}
-  [1;38;5;${main_color}mminer:         [0m${is_miner}
-  [1;38;5;${main_color}mstatus:        [0m${status}")
+  [1;38;5;${main_color}mchain:         [0m${IS_CHAIN}
+  [1;38;5;${main_color}mvalidator:     [0m${IS_VALIDATOR}
+  [1;38;5;${main_color}mminer:         [0m${IS_MINER}
+
+  [1;38;5;${main_color}mstatus:        [0m${status}") 
     header=$(gum join --horizontal --align top "${logo}" '  ' "${info}")
 
     print_test "${header}"
@@ -344,67 +348,108 @@ fetch_network_address() {
 }
 
 
+update_config_var() {
+    local file=$1
+    local var=$2
+    local value=$3
+    local temp_file
 
-save_to_env_file() {
-    # Note: Variables might be used in multiple env files, that is okay.
-    # Config environment variables
-    echo "IS_VALIDATOR=$is_validator" >> "$config_env_file"
-    echo "IS_MINER=$is_miner" >> "$config_env_file"
-    echo "OP_EMAIL=$OP_EMAIL" >> "$config_env_file"
+    temp_file=$(mktemp)
 
-    # Agent environment variables
-    echo "VIRTUAL_HOST=$NODE_HOSTNAME" >> "$agent_env_file"
-    echo "LETSENCRYPT_HOST=$NODE_HOSTNAME" >> "$agent_env_file"
-    echo "LETSENCRYPT_EMAIL=$OP_EMAIL" >> "$agent_env_file"
-    echo "CHAIN_ID=$CHAIN_ID" >> "$agent_env_file"
-    echo "NODE_HOSTNAME=$NODE_HOSTNAME" >> "$agent_env_file"
-    echo "MODEL_NAME=$MODEL_NAME" >> "$agent_env_file"
-    echo "NODE_PRIV_KEY=$NODE_PRIV_KEY" >> "$agent_env_file"
-    
-    #bsns-s
-    echo "MODEL_NAME=$MODEL_NAME" >> "$bsns_s_env_file"
-    echo "INITIAL_PEER=$INITIAL_PEER" >> "$bsns_s_env_file"
-    echo "NODE_PRIV_KEY=$NODE_PRIV_KEY" >> "$bsns_s_env_file"
-    echo "PUBLIC_IP=$PUBLIC_IP" >> "$bsns_s_env_file"
-    echo "HUGGINGFACE_API_KEY=$HUGGINGFACE_API_KEY" >> "$bsns_s_env_file"
+    if grep -q "^$var=" "$file"; then
+        # Use a temporary file to handle sed differences
+        sed "s|^$var=.*|$var=$value|" "$file" > "$temp_file" && mv "$temp_file" "$file"
+    else
+        echo "$var=$value" >> "$file"
+    fi
 
-    #bsns-c
-    echo "MODEL_NAME=$MODEL_NAME" >> "$bsns_c_env_file"
-    echo "PUBLIC_IP=$PUBLIC_IP" >> "$bsns_c_env_file"
-    echo "NODE_PRIV_KEY=$NODE_PRIV_KEY" >> "$bsns_c_env_file"
-
-
-    # Orchestrator environment variables
-    echo "IS_DIST=$IS_DIST" >> "$orchestrator_env_file"
-    echo "HUGGINGFACE_API_KEY=$HUGGINGFACE_API_KEY" >> "$orchestrator_env_file"
-    echo "MONIKER=$MONIKER" >> "$orchestrator_env_file"
-    echo "INITIAL_PEER=$INITIAL_PEER" >> "$orchestrator_env_file"
-
-    # Base environment variables
-    echo "MONIKER=$MONIKER" >> "$base_env_file"
-    echo "CHAIN_ID=$CHAIN_ID" >> "$base_env_file"
-
+    # Clean up the temporary file if it still exists
+    [ -f "$temp_file" ] && rm "$temp_file"
 }
 
 
+save_to_env_file() {
+    # Config environment variables
+    update_config_var "$config_env_file" "IS_CHAIN" "$IS_CHAIN"
+    update_config_var "$config_env_file" "IS_VALIDATOR" "$IS_VALIDATOR"
+    update_config_var "$config_env_file" "IS_MINER" "$IS_MINER"
+    update_config_var "$config_env_file" "MINER_TYPE" "$MINER_TYPE"
+    update_config_var "$config_env_file" "DISTRIBUTED_TYPE" "$DISTRIBUTED_TYPE"
+    update_config_var "$config_env_file" "OP_EMAIL" "$OP_EMAIL"
+
+    # Agent environment variables
+    update_config_var "$agent_env_file" "VIRTUAL_HOST" "$NODE_HOSTNAME"
+    update_config_var "$agent_env_file" "LETSENCRYPT_HOST" "$NODE_HOSTNAME"
+    update_config_var "$agent_env_file" "LETSENCRYPT_EMAIL" "$OP_EMAIL"
+    update_config_var "$agent_env_file" "CHAIN_ID" "$CHAIN_ID"
+    update_config_var "$agent_env_file" "NODE_HOSTNAME" "$NODE_HOSTNAME"
+    update_config_var "$agent_env_file" "MODEL_NAME" "$MODEL_NAME"
+    update_config_var "$agent_env_file" "NODE_PRIV_KEY" "$NODE_PRIV_KEY"
+
+    # bsns-s environment variables
+    update_config_var "$bsns_s_env_file" "MODEL_NAME" "$MODEL_NAME"
+    update_config_var "$bsns_s_env_file" "INITIAL_PEER" "$INITIAL_PEER"
+    update_config_var "$bsns_s_env_file" "NODE_PRIV_KEY" "$NODE_PRIV_KEY"
+    update_config_var "$bsns_s_env_file" "PUBLIC_IP" "$PUBLIC_IP"
+    update_config_var "$bsns_s_env_file" "HUGGINGFACE_API_KEY" "$HUGGINGFACE_API_KEY"
+
+    # bsns-c environment variables
+    update_config_var "$bsns_c_env_file" "MODEL_NAME" "$MODEL_NAME"
+    update_config_var "$bsns_c_env_file" "PUBLIC_IP" "$PUBLIC_IP"
+    update_config_var "$bsns_c_env_file" "NODE_PRIV_KEY" "$NODE_PRIV_KEY"
+
+    # Orchestrator environment variables
+    update_config_var "$orchestrator_env_file" "IS_DIST" "$IS_DIST"
+    update_config_var "$orchestrator_env_file" "HUGGINGFACE_API_KEY" "$HUGGINGFACE_API_KEY"
+    update_config_var "$orchestrator_env_file" "MONIKER" "$MONIKER"
+    update_config_var "$orchestrator_env_file" "INITIAL_PEER" "$INITIAL_PEER"
+
+    # Base environment variables
+    update_config_var "$base_env_file" "MONIKER" "$MONIKER"
+    update_config_var "$base_env_file" "CHAIN_ID" "$CHAIN_ID"
+}
+
+display_config() {
+    local exclude_keys=("HUGGINGFACE_API_KEY" "NODE_PRIV_KEY")
+    local config_content
+
+    config_content=$(cat "$config_env_file" "$agent_env_file" "$bsns_c_env_file" "$bsns_s_env_file" "$orchestrator_env_file" "$base_env_file" | sort | uniq)
+    
+
+    for key in "${exclude_keys[@]}"; do
+        config_content=$(echo "$config_content" | grep -v "^$key=")
+    done
+
+    config_content=$(echo "$config_content" | grep -v "=$")
+
+    config_content="\`\`\`Makefile\n$config_content\n\`\`\`"
+
+    echo -e "$config_content" | gum format --type markdown --theme dracula 
+
+}
 
 compose_up() {
     local compose_files
     compose_files="compose.yml"
 
-    if [[ "$node_type" == *"Miner"* ]]; then
-        if [[ "$miner_type" == *"Non-Distributed Miner"* ]]; then
-            compose_files+=" -f compose.agent.yml -f compose.orchestrator.yml"
-        elif [[ "$miner_type" == *"Distributed Miner"* ]]; then
-            if [[ "$distributed_type" == *"Start a new swarm"* ]]; then
-                compose_files+=" -f compose.agent.yml -f compose.orchestrator.yml -f compose.bsns-c.yml"
-            else
+    if [[ "$IS_CHAIN" == "yes" ]] || [[ "$IS_VALIDATOR" == "yes" ]]; then
+        compose_files+=" -f compose.chain.yml"
+    fi 
+
+
+
+    if [[ "$IS_MINER" == "yes" ]]; then
+        if [[ "$MINER_TYPE" == "$miner_type_non_distributed" ]]; then
+            compose_files+=" -f compose.non-dist.yml"
+        elif [[ "$MINER_TYPE" == "$miner_type_distributed" ]]; then
+            if [[ "$DISTRIBUTED_TYPE" == "$distributed_type_new_swarm" ]]; then
+                compose_files+=" -f compose.bsns-c.yml"
+            elif [[ "$DISTRIBUTED_TYPE" == "$distributed_type_existing_swarm" ]]; then
                 compose_files+=" -f compose.bsns-s.yml"
             fi
         fi
     fi 
 
-    # gum spin -s line --title "Starting Docker Compose..." --
     docker compose -f $compose_files up -d --wait
 
     if [[ $? -ne 0 ]]; then
@@ -457,16 +502,20 @@ load_from_env_file() {
     elif [ "$1" != "advanced" ]; then
         touch "$base_env_file"
     fi
+
+    # defaults for when they are not previously set (probably need to move some more variables here)
+    IS_CHAIN=${IS_CHAIN:-"yes"}
+    IS_VALIDATOR=${IS_VALIDATOR:-"no"}
+    IS_MINER=${IS_MINER:-"no"}
+    MINER_TYPE=${MINER_TYPE:-$MINER_TYPE_NONE}
+    DISTRIBUTED_TYPE=${DISTRIBUTED_TYPE:-$DISTRIBUTED_TYPE_NONE}
+    # TODO: revisit below
+    PRIV_KEY=${PRIV_KEY:-""}
+    HUGGINGFACE_API_KEY=${HUGGINGFACE_API_KEY:-""}
+    MODEL_NAME=${MODEL_NAME:-""}
 }
 
-
-
-
 load_from_env_file "wizard"
-PRIV_KEY=${PRIV_KEY:-""}
-HUGGINGFACE_API_KEY=${HUGGINGFACE_API_KEY:-""}
-MODEL_NAME=${MODEL_NAME:-""}
-
 
 # don't use cached/saved values for these 
 PUBLIC_IP=$(curl -s ifconfig.me)
@@ -495,13 +544,6 @@ update_header
 
 if grep -q "$advanced_mode" <<<"$mode"; then
     load_from_env_file "advanced"
-    echo -e "Current configuration:"
-    cat "$config_env_file" "$agent_env_file" "$bsns_c_env_file" "$bsns_s_env_file" "$orchestrator_env_file" "$base_env_file" | sort | uniq
-
-    confirm=$(gum confirm "Do you want to run this script with this configuration?")
-    if [ "$confirm" != "yes" ]; then
-        exit 0
-    fi
 else
 
 
@@ -542,20 +584,41 @@ else
 
     echo -e "Now, what type(s) of node is $(gum style --foreground "$main_color" "$MONIKER")? (use space to select which type(s)"
 
+    chain_string="Base"
     validator_string="Validator"
     miner_string="Miner"
 
-    node_type=$(gum choose --no-limit "$validator_string" "$miner_string")
+    previous_node_type="$chain_string"
 
-    grep -q "$validator_string" <<<"$node_type" && is_validator="pending"
-    grep -q "$miner_string" <<<"$node_type" && is_miner="pending"
+    if [[ "$IS_CHAIN" == "yes" ]]; then
+        previous_node_type="$chain_string"
+    fi
+
+    if [[ "$IS_VALIDATOR" == "yes" ]]; then
+        if [[ -n "$previous_node_type" ]]; then
+            previous_node_type+=","
+        fi
+        previous_node_type+="$validator_string"
+    fi
+
+    if [[ "$IS_MINER" == "yes" ]]; then
+        if [[ -n "$previous_node_type" ]]; then
+            previous_node_type+=","
+        fi
+        previous_node_type+="$miner_string"
+    fi
+
+    node_type=$(gum choose --no-limit "$chain_string" "$validator_string" "$miner_string" --selected "$previous_node_type")
+
+    grep -q "$chain_string" <<<"$node_type"
+    grep -q "$validator_string" <<<"$node_type"
+    grep -q "$miner_string" <<<"$node_type"
 
     clear
     update_header
 
     gum spin -s line --title "Setting up working directory and cloning node repository..." -- setup_work_dir
     setup_work_dir
-
 
     if grep -q "$validator_string" <<<"$node_type"; then
 
@@ -645,26 +708,44 @@ else
         distributed_string="Distributed Miner"
         non_distributed_string="Non-Distributed Miner"
 
-        miner_type=$(gum choose "$distributed_string" "$non_distributed_string")
+     
+        if [[ "$MINER_TYPE" == "$miner_type_distributed" ]]; then
+            default_miner_choice="$distributed_string"
+        else
+            default_miner_choice="$non_distributed_string"
+        fi
+
+
+        selected_miner_type=$(gum choose "$distributed_string" "$non_distributed_string" --selected "$default_miner_choice")
 
 
         clear
         update_header
 
-        if grep -q "$miner_type" <<<"$distributed_string"; then
+        if grep -q "$selected_miner_type" <<<"$distributed_string"; then
             IS_DIST=True
+            MINER_TYPE=$miner_type_distributed
 
             
             echo -e "Would you like to join an existing $(gum style --foreground "$main_color" "swarm") or start a new one?"
             existing_swarm="Join existing swarm"
             new_swarm="Start a new swarm"
 
-            distributed_type=$(gum choose "$existing_swarm" "$new_swarm")
+
+            if [[ "$DISTRIBUTED_TYPE" == "$distributed_type_new_swarm" ]]; then
+                default_swarm_choice="$new_swarm"
+            else
+                default_swarm_choice="$existing_swarm"
+            fi
+
+
+            selected_distributed_type=$(gum choose "$existing_swarm" "$new_swarm" --selected "$default_swarm_choice")
 
             clear
             update_header
 
-            if grep -q "$distributed_type" <<<"$new_swarm"; then
+            if grep -q "$selected_distributed_type" <<<"$new_swarm"; then
+                DISTRIBUTED_TYPE=$distributed_type_new_swarm
                 MODEL_NAME=$(
                     gum input --cursor.foreground "${main_color}" \
                         --prompt.foreground "${main_color}" \
@@ -676,6 +757,7 @@ else
 
 
             else 
+                DISTRIBUTED_TYPE=$distributed_type_existing_swarm
                 swarms_map=$(get_swarms_map)
                 model_names=$(get_model_names "$swarms_map")
                 echo -e "Which existing $(gum style --foreground "$main_color" "swarm") would you like to join?"
@@ -689,8 +771,9 @@ else
 
             fi
 
-        else # non-distributed setup
-
+        else
+            MINER_TYPE=$miner_type_non_distributed
+            DISTRIBUTED_TYPE=$distributed_type_none
             MODEL_NAME=$(
                 gum input --cursor.foreground "${main_color}" \
                     --prompt.foreground "${main_color}" \
@@ -715,8 +798,25 @@ else
                 --value "$HUGGINGFACE_API_KEY"
             )
         
+    else
+        MINER_TYPE=$miner_type_none
+        DISTRIBUTED_TYPE=$distributed_type_none
     fi
+
     save_to_env_file
+fi
+
+
+clear
+update_header
+
+display_config
+
+confirm_spin_up=$(gum confirm "Do you want to start the node with the above configuration?")
+
+if ! $confirm_spin_up; then
+    echo "Configuration saved. You can modify the configuration manually, run the wizard again, or you can simply use advanced wizardry to boot your node."
+    exit 0
 fi
 
 cd "$WORKING_DIRECTORY/docker" || {
@@ -724,10 +824,9 @@ cd "$WORKING_DIRECTORY/docker" || {
     exit 1
 }
 
-clear
-update_header
 compose_up
-cd "$init_pwd" || return
 
+
+cd "$init_pwd" || return
 echo -e "Congratulations! Your $(gum style --foreground "$main_color" "nesa") node was successfully bootstrapped!"
 # set +x
