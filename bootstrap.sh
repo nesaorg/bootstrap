@@ -611,9 +611,9 @@ else
 
     node_type=$(gum choose --no-limit "$chain_string" "$validator_string" "$miner_string" --selected "$previous_node_type")
 
-    grep -q "$chain_string" <<<"$node_type"
-    grep -q "$validator_string" <<<"$node_type"
-    grep -q "$miner_string" <<<"$node_type"
+    grep -q "$chain_string" <<<"$node_type" && IS_CHAIN="yes" || IS_CHAIN="no"
+    grep -q "$validator_string" <<<"$node_type" && IS_VALIDATOR="yes" || IS_VALIDATOR="no"
+    grep -q "$miner_string" <<<"$node_type" && IS_MINER="yes" || IS_MINER="no"
 
     clear
     update_header
