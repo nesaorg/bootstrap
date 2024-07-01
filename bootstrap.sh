@@ -503,16 +503,17 @@ load_from_env_file() {
         touch "$base_env_file"
     fi
 
-    # defaults for when they are not previously set (probably need to move some more variables here)
-    IS_CHAIN=${IS_CHAIN:-"yes"}
-    IS_VALIDATOR=${IS_VALIDATOR:-"no"}
-    IS_MINER=${IS_MINER:-"no"}
-    MINER_TYPE=${MINER_TYPE:-$MINER_TYPE_NONE}
-    DISTRIBUTED_TYPE=${DISTRIBUTED_TYPE:-$DISTRIBUTED_TYPE_NONE}
+    # defaults
+    : ${IS_CHAIN:="yes"}
+    : ${IS_VALIDATOR:="no"}
+    : ${IS_MINER:="no"}
+    : ${MINER_TYPE:=$MINER_TYPE_NONE}
+    : ${DISTRIBUTED_TYPE:=$DISTRIBUTED_TYPE_NONE}
+
     # TODO: revisit below
-    PRIV_KEY=${PRIV_KEY:-""}
-    HUGGINGFACE_API_KEY=${HUGGINGFACE_API_KEY:-""}
-    MODEL_NAME=${MODEL_NAME:-""}
+    : ${PRIV_KEY:=""}
+    : ${HUGGINGFACE_API_KEY:=""}
+    : ${MODEL_NAME:=""}
 }
 
 load_from_env_file "wizard"
