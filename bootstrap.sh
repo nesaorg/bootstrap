@@ -724,7 +724,7 @@ else
         update_header
 
         if grep -q "$selected_miner_type" <<<"$distributed_string"; then
-            IS_DIST=True
+            IS_DIST=True # TODO: update containers to rely on DISTRIBUTED_TYPE instead of IS_DIST
             MINER_TYPE=$miner_type_distributed
 
             
