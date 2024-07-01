@@ -685,9 +685,8 @@ else
 
         prompt_for_node_pk=0
 
-        if [ -n "$NODE_PRIV_KEY" ]; then
-            pk_confirm=$(gum confirm "Do you want to use the existing private key? ")
-            if ! $pk_confirm; then
+     if [ -n "$NODE_PRIV_KEY" ]; then
+            if ! gum confirm "Do you want to use the existing private key? "; then
                 prompt_for_node_pk=1
             fi
         else
@@ -813,9 +812,7 @@ update_header
 
 display_config
 
-confirm_spin_up=$(gum confirm "Do you want to start the node with the above configuration?")
-
-if ! $confirm_spin_up; then
+if ! gum confirm "Do you want to start the node with the above configuration? "; then
     echo "Configuration saved. You can modify the configuration manually, run the wizard again, or you can simply use advanced wizardry to boot your node."
     exit 0
 fi
