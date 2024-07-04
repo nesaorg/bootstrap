@@ -400,9 +400,9 @@ save_to_env_file() {
 
     # Orchestrator environment variables
     update_config_var "$orchestrator_env_file" "IS_DIST" "$IS_DIST"
+    update_config_var "$bsns_c_env_file" "MODEL_NAME" "$MODEL_NAME"
     update_config_var "$orchestrator_env_file" "HUGGINGFACE_API_KEY" "$HUGGINGFACE_API_KEY"
     update_config_var "$orchestrator_env_file" "MONIKER" "$MONIKER"
-    update_config_var "$orchestrator_env_file" "INITIAL_PEER" "$INITIAL_PEER"
 
     # Base environment variables
     update_config_var "$base_env_file" "MONIKER" "$MONIKER"
