@@ -777,9 +777,9 @@ else
             MODEL_NAME=$(
                 gum input --cursor.foreground "${main_color}" \
                     --prompt.foreground "${main_color}" \
-                    --prompt "Which model would you like to run?" \
+                    --prompt "Which model would you like to run? " \
                     --placeholder "nlptown/bert-base-multilingual-uncased-sentiment" \
-                    --width 80 \
+                    --width 120 \
                     --value "$MODEL_NAME"
             )
             
