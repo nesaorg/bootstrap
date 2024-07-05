@@ -480,7 +480,7 @@ compose_up() {
         fi
     fi 
 
-    docker compose --pull always -f $compose_files up -d --wait
+    docker compose -f $compose_files up --pull always -d --wait
 
     if [[ $? -ne 0 ]]; then
         echo "Error: Docker Compose failed to start."
