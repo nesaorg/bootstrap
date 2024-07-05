@@ -17,6 +17,15 @@
 # vars
 #
 
+
+trap "cleanup" INT
+
+cleanup() {
+    printf "\n Aborting node setup. Cleaning up...\n"
+    # Add any additional cleanup tasks here
+    exit 1
+}
+
 # set -x
 terminal_size=$(stty size)
 terminal_height=${terminal_size% *}
@@ -208,6 +217,27 @@ check_docker_installed() {
     if ! command_exists docker; then
         echo "Docker is not installed. Please install Docker and try again."
         exit 1
+    fi
+}
+
+# TODO: handle the need for sudo here -.-
+check_nvidia_installed() {
+    if ! command_exists nvidia-smi; then
+        echo "NVIDIA drivers are not installed. Please install NVIDIA drivers and try again."
+        exit 1
+    fi
+
+    if ! command_exists nvidia-container-runtime; then
+        sudo curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
+            && sudo curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+            sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+            sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+
+        sudo apt-get update
+        sudo apt-get install -y nvidia-container-toolkit
+
+        sudo nvidia-ctk runtime configure --runtime=docker
+        sudo systemctl restart docker
     fi
 }
 
@@ -450,7 +480,7 @@ compose_up() {
         fi
     fi 
 
-    docker compose -f $compose_files up -d --wait
+    docker compose --pull always -f $compose_files up -d --wait
 
     if [[ $? -ne 0 ]]; then
         echo "Error: Docker Compose failed to start."
