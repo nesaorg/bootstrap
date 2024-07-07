@@ -804,6 +804,7 @@ else
         else
             MINER_TYPE=$miner_type_non_distributed
             DISTRIBUTED_TYPE=$distributed_type_none
+            IS_DIST=False # deprecrated: update containers to rely on DISTRIBUTED_TYPE instead of IS_DIST
             MODEL_NAME=$(
                 gum input --cursor.foreground "${main_color}" \
                     --prompt.foreground "${main_color}" \
