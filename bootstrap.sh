@@ -470,12 +470,12 @@ compose_up() {
 
     if [[ "$IS_MINER" == "yes" ]]; then
         if [[ "$MINER_TYPE" == "$miner_type_non_distributed" ]]; then
-            compose_files+=" -f compose.non-dist.yml"
+            compose_files+=" -f compose.non-dist.nvidia.yml"
         elif [[ "$MINER_TYPE" == "$miner_type_distributed" ]]; then
             if [[ "$DISTRIBUTED_TYPE" == "$distributed_type_new_swarm" ]]; then
                 compose_files+=" -f compose.bsns-c.yml"
             elif [[ "$DISTRIBUTED_TYPE" == "$distributed_type_existing_swarm" ]]; then
-                compose_files+=" -f compose.bsns-s.yml"
+                compose_files+=" -f compose.bsns-s.nvidia.yml"
             fi
         fi
     fi 
