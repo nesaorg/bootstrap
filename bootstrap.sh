@@ -574,6 +574,7 @@ PUBLIC_IP=$(curl -s ifconfig.me)
 check_gum_installed
 check_docker_installed
 check_jq_installed
+check_nvidia_installed
 
 clear
 update_header
