@@ -294,6 +294,21 @@ setup_work_dir() {
     fi
 }
 
+
+update_work_dir() {
+    cd "$WORKING_DIRECTORY" || {
+        echo -e "Error changing to working directory: $WORKING_DIRECTORY"
+        exit 1
+    } 
+
+    if [ -d "docker" ]; then
+        cd docker
+        gum spin -s line --title "Pulling latest updates from nesaorg/docker repository..." -- git pull
+        cd ..
+    fi
+
+}
+
 get_swarms_map() {
     local url="https://lcd.test.nesa.ai/nesachain/dht/get_orchestrators"
     local json_data
@@ -574,6 +589,7 @@ clear
 update_header
 
 if grep -q "$advanced_mode" <<<"$mode"; then
+    setup_work_dir
     load_from_env_file "advanced"
 else
 
