@@ -707,6 +707,7 @@ check_gum_installed
 check_docker_installed
 check_jq_installed
 check_nvidia_installed
+detect_hardware_capabilities
 
 clear
 update_header
