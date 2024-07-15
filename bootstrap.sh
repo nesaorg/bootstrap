@@ -61,6 +61,7 @@ agent_env_file="$env_dir/agent.env"
 bsns_s_env_file="$env_dir/bsns-s.env"
 bsns_c_env_file="$env_dir/bsns-c.env"
 orchestrator_env_file="$env_dir/orchestrator.env"
+fluentbit_env_file="$env_dir/fluentbit.env"
 base_env_file="$env_dir/base.env"
 config_env_file="$env_dir/.env"
 
@@ -265,6 +266,117 @@ download_import_key_expect() {
 
 }
 
+
+get_linux_info() {
+    local name version kernel architecture cpu ram disk_avail gpu
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        name=$NAME
+        version=$VERSION
+    else
+        name="Not Available"
+        version="Not Available"
+    fi
+    kernel=$(uname -r)
+    architecture=$(uname -m)
+    cpu=$(lscpu | grep 'Model name' | awk -F: '{print $2}' | sed 's/^ *//')
+    ram=$(free -h | grep Mem | awk '{print $2}')
+    disk_avail=$(df -h --total | grep total | awk '{print $4}')
+    gpu=$(lspci | grep -i vga | awk -F: '{print $3}' | sed 's/^ *//')
+
+    NODE_OS="Linux $version"
+    NODE_ARCH="$architecture"
+    NODE_CPU="$cpu"
+    NODE_GPU="$gpu"
+    NODE_RAM="$ram"
+    NODE_VRAM="NA"
+    NODE_DISK_AVAIL="$disk_avail"
+}
+
+get_macos_info() {
+    local product_version build_version architecture cpu ram disk_avail gpu
+    product_version=$(sw_vers -productVersion)
+    build_version=$(sw_vers -buildVersion)
+    architecture=$(uname -m)
+    cpu=$(sysctl -n machdep.cpu.brand_string)
+    ram=$(sysctl -n hw.memsize | awk '{print $1/1024/1024/1024 " GB"}')
+    disk_avail=$(df -h / | grep / | awk '{print $4}')
+    gpu=$(system_profiler SPDisplaysDataType | grep 'Chipset Model' | awk -F: '{print $2}' | sed 's/^ *//')
+
+    NODE_OS="MacOS $product_version ($build_version)"
+    NODE_ARCH="$architecture"
+    NODE_CPU="$cpu"
+    NODE_GPU="$gpu"
+    NODE_RAM="$ram"
+    NODE_VRAM="NA"
+    NODE_DISK_AVAIL="$disk_avail"
+}
+
+get_windows_info() {
+    local caption version architecture cpu ram disk_avail gpu
+    caption=$(wmic os get Caption /value | awk -F= '{print $2}')
+    version=$(wmic os get Version /value | awk -F= '{print $2}')
+    architecture=$(wmic os get OSArchitecture /value | awk -F= '{print $2}')
+    cpu=$(wmic cpu get name /value | awk -F= '{print $2}')
+    ram=$(wmic computersystem get totalphysicalmemory /value | awk -F= '{print $2/1024/1024/1024 " GB"}')
+    disk_avail=$(wmic logicaldisk get size,freespace,caption | awk '{if ($1 == "C:") print $3/1024/1024/1024 " GB"}')
+    gpu=$(wmic path win32_videocontroller get name /value | awk -F= '{print $2}')
+
+    NODE_OS="Windows $caption $version"
+    NODE_ARCH="$architecture"
+    NODE_CPU="$cpu"
+    NODE_GPU="$gpu"
+    NODE_RAM="$ram"
+    NODE_VRAM="NA"
+    NODE_DISK_AVAIL="$disk_avail"
+}
+
+get_wsl_info() {
+    local name version kernel architecture cpu ram disk_avail
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        name=$NAME
+        version=$VERSION
+    else
+        name="Not Available"
+        version="Not Available"
+    fi
+    kernel=$(uname -r)
+    architecture=$(uname -m)
+    cpu=$(grep -m1 'model name' /proc/cpuinfo | awk -F: '{print $2}' | sed 's/^ *//')
+    ram=$(free -h | grep Mem | awk '{print $2}')
+    disk_avail=$(df -h --total | grep total | awk '{print $4}')
+
+    NODE_OS="WSL $version ($kernel)"
+    NODE_ARCH="$architecture"
+    NODE_CPU="$cpu"
+    NODE_GPU="NA"
+    NODE_RAM="$ram"
+    NODE_VRAM="NA"
+    NODE_DISK_AVAIL="$disk_avail"
+}
+
+detect_hardware_capabilities() {
+    case "$(uname -s)" in
+        Linux)
+            if grep -q Microsoft /proc/version; then
+                get_wsl_info
+            else
+                get_linux_info
+            fi
+            ;;
+        Darwin)
+            get_macos_info
+            ;;
+        CYGWIN*|MINGW*|MSYS*)
+            get_windows_info
+            ;;
+        *)
+            echo "Unsupported platform"
+            ;;
+    esac
+}
+
 setup_work_dir() {
     if [ ! -d "$WORKING_DIRECTORY" ]; then
         mkdir -p "$WORKING_DIRECTORY"
@@ -437,17 +549,31 @@ save_to_env_file() {
     update_config_var "$bsns_s_env_file" "NODE_PRIV_KEY" "$NODE_PRIV_KEY"
     update_config_var "$bsns_s_env_file" "PUBLIC_IP" "$PUBLIC_IP"
     update_config_var "$bsns_s_env_file" "HUGGINGFACE_API_KEY" "$HUGGINGFACE_API_KEY"
+    update_config_var "$bsns_s_env_file" "NODE_OS" "$NODE_OS"
+    update_config_var "$bsns_s_env_file" "NODE_ARCH" "$NODE_ARCH"
+    update_config_var "$bsns_s_env_file" "NODE_CPU" "$NODE_CPU"
+
 
     # bsns-c environment variables
     update_config_var "$bsns_c_env_file" "MODEL_NAME" "$MODEL_NAME"
     update_config_var "$bsns_c_env_file" "PUBLIC_IP" "$PUBLIC_IP"
     update_config_var "$bsns_c_env_file" "NODE_PRIV_KEY" "$NODE_PRIV_KEY"
+    update_config_var "$bsns_c_env_file" "NODE_OS" "$NODE_OS"
+    update_config_var "$bsns_c_env_file" "NODE_ARCH" "$NODE_ARCH"
+    update_config_var "$bsns_c_env_file" "NODE_CPU" "$NODE_CPU"
 
     # Orchestrator environment variables
     update_config_var "$orchestrator_env_file" "IS_DIST" "$IS_DIST"
-    update_config_var "$bsns_c_env_file" "MODEL_NAME" "$MODEL_NAME"
+    update_config_var "$orchestrator_env_file" "MODEL_NAME" "$MODEL_NAME"
     update_config_var "$orchestrator_env_file" "HUGGINGFACE_API_KEY" "$HUGGINGFACE_API_KEY"
     update_config_var "$orchestrator_env_file" "MONIKER" "$MONIKER"
+    update_config_var "$orchestrator_env_file" "NODE_OS" "$NODE_OS"
+    update_config_var "$orchestrator_env_file" "NODE_ARCH" "$NODE_ARCH"
+    update_config_var "$orchestrator_env_file" "NODE_CPU" "$NODE_CPU"
+
+    # Fluentbit environment variables
+    update_config_var "$fluentbit_env_file" "PUBLIC_IP" "$PUBLIC_IP"
+    update_config_var "$fluentbit_env_file" "MONIKER" "$MONIKER"
 
     # Base environment variables
     update_config_var "$base_env_file" "MONIKER" "$MONIKER"
@@ -540,6 +666,12 @@ load_from_env_file() {
         source "$orchestrator_env_file"
     elif [ "$1" != "advanced" ]; then
         touch "$orchestrator_env_file"
+    fi
+
+    if [ -f "$fluentbit_env_file" ]; then
+        source "$fluentbit_env_file"
+    elif [ "$1" != "advanced" ]; then
+        touch "$fluentbit_env_file"
     fi
 
     if [ -f "$base_env_file" ]; then
