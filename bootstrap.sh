@@ -599,24 +599,28 @@ display_config() {
 
 }
 
+
 compose_up() {
-    local compose_files
-    compose_files="compose.yml"
+    local compose_files="compose.yml"
+    local nvidia_present=$(command -v nvidia-smi)
+    local compose_ext=".yml"
+
+    if [[ -n "$nvidia_present" ]]; then
+        compose_ext=".nvidia.yml"
+    fi
 
     if [[ "$IS_CHAIN" == "yes" ]] || [[ "$IS_VALIDATOR" == "yes" ]]; then
         compose_files+=" -f compose.chain.yml"
     fi 
 
-
-
     if [[ "$IS_MINER" == "yes" ]]; then
         if [[ "$MINER_TYPE" == "$miner_type_non_distributed" ]]; then
-            compose_files+=" -f compose.non-dist.nvidia.yml"
+            compose_files+=" -f compose.non-dist${compose_ext}"
         elif [[ "$MINER_TYPE" == "$miner_type_distributed" ]]; then
             if [[ "$DISTRIBUTED_TYPE" == "$distributed_type_new_swarm" ]]; then
-                compose_files+=" -f compose.bsns-c.yml"
+                compose_files+=" -f compose.bsns-c${compose_ext}"
             elif [[ "$DISTRIBUTED_TYPE" == "$distributed_type_existing_swarm" ]]; then
-                compose_files+=" -f compose.bsns-s.nvidia.yml"
+                compose_files+=" -f compose.bsns-s${compose_ext}"
             fi
         fi
     fi 
@@ -630,7 +634,6 @@ compose_up() {
         echo "Docker Compose started successfully."
     fi
 }
-
 
 
 load_from_env_file() {
