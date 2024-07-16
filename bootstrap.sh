@@ -540,44 +540,30 @@ save_to_env_file() {
     update_config_var "$agent_env_file" "LETSENCRYPT_EMAIL" "$OP_EMAIL"
     update_config_var "$agent_env_file" "CHAIN_ID" "$CHAIN_ID"
     update_config_var "$agent_env_file" "NODE_HOSTNAME" "$NODE_HOSTNAME"
-    update_config_var "$agent_env_file" "MODEL_NAME" "$MODEL_NAME"
     update_config_var "$agent_env_file" "NODE_PRIV_KEY" "$NODE_PRIV_KEY"
 
     # bsns-s environment variables
-    update_config_var "$bsns_s_env_file" "MODEL_NAME" "$MODEL_NAME"
     update_config_var "$bsns_s_env_file" "INITIAL_PEER" "$INITIAL_PEER"
     update_config_var "$bsns_s_env_file" "NODE_PRIV_KEY" "$NODE_PRIV_KEY"
-    update_config_var "$bsns_s_env_file" "PUBLIC_IP" "$PUBLIC_IP"
     update_config_var "$bsns_s_env_file" "HUGGINGFACE_API_KEY" "$HUGGINGFACE_API_KEY"
-    update_config_var "$bsns_s_env_file" "NODE_OS" "$NODE_OS"
-    update_config_var "$bsns_s_env_file" "NODE_ARCH" "$NODE_ARCH"
-    update_config_var "$bsns_s_env_file" "NODE_CPU" "$NODE_CPU"
 
 
     # bsns-c environment variables
-    update_config_var "$bsns_c_env_file" "MODEL_NAME" "$MODEL_NAME"
     update_config_var "$bsns_c_env_file" "PUBLIC_IP" "$PUBLIC_IP"
     update_config_var "$bsns_c_env_file" "NODE_PRIV_KEY" "$NODE_PRIV_KEY"
-    update_config_var "$bsns_c_env_file" "NODE_OS" "$NODE_OS"
-    update_config_var "$bsns_c_env_file" "NODE_ARCH" "$NODE_ARCH"
-    update_config_var "$bsns_c_env_file" "NODE_CPU" "$NODE_CPU"
 
     # Orchestrator environment variables
     update_config_var "$orchestrator_env_file" "IS_DIST" "$IS_DIST"
-    update_config_var "$orchestrator_env_file" "MODEL_NAME" "$MODEL_NAME"
     update_config_var "$orchestrator_env_file" "HUGGINGFACE_API_KEY" "$HUGGINGFACE_API_KEY"
     update_config_var "$orchestrator_env_file" "MONIKER" "$MONIKER"
-    update_config_var "$orchestrator_env_file" "NODE_OS" "$NODE_OS"
-    update_config_var "$orchestrator_env_file" "NODE_ARCH" "$NODE_ARCH"
-    update_config_var "$orchestrator_env_file" "NODE_CPU" "$NODE_CPU"
-
-    # Fluentbit environment variables
-    update_config_var "$fluentbit_env_file" "PUBLIC_IP" "$PUBLIC_IP"
-    update_config_var "$fluentbit_env_file" "MONIKER" "$MONIKER"
 
     # Base environment variables
+    update_config_var "$base_env_file" "MODEL_NAME" "$MODEL_NAME"
     update_config_var "$base_env_file" "MONIKER" "$MONIKER"
-    update_config_var "$base_env_file" "CHAIN_ID" "$CHAIN_ID"
+    update_config_var "$base_env_file" "PUBLIC_IP" "$PUBLIC_IP"
+    update_config_var "$base_env_file" "NODE_OS" "$NODE_OS"
+    update_config_var "$base_env_file" "NODE_ARCH" "$NODE_ARCH"
+    update_config_var "$base_env_file" "NODE_CPU" "$NODE_CPU"
 }
 
 display_config() {
