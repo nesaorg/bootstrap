@@ -66,9 +66,8 @@ base_env_file="$env_dir/base.env"
 config_env_file="$env_dir/.env"
 
 init_pwd=$PWD # so they can get back to where they started!
-
 status="booting" # lol not really doing anything with this currently
-
+ORC_PORT=31331
 #
 # basic helper functions
 #
@@ -564,6 +563,7 @@ save_to_env_file() {
     update_config_var "$base_env_file" "NODE_OS" "$NODE_OS"
     update_config_var "$base_env_file" "NODE_ARCH" "$NODE_ARCH"
     update_config_var "$base_env_file" "NODE_CPU" "$NODE_CPU"
+    update_config_var "$base_env_file" "ORC_PORT" "$ORC_PORT"
 }
 
 display_config() {
