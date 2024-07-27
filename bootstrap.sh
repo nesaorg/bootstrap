@@ -64,7 +64,6 @@ orchestrator_env_file="$env_dir/orchestrator.env"
 fluentbit_env_file="$env_dir/fluentbit.env"
 base_env_file="$env_dir/base.env"
 config_env_file="$env_dir/.env"
-
 init_pwd=$PWD # so they can get back to where they started!
 status="booting" # lol not really doing anything with this currently
 ORC_PORT=31331
@@ -697,7 +696,6 @@ check_docker_installed
 check_jq_installed
 check_nvidia_installed
 detect_hardware_capabilities
-
 clear
 update_header
 
@@ -973,9 +971,10 @@ else
         DISTRIBUTED_TYPE=$distributed_type_none
     fi
 
-    save_to_env_file
 fi
 
+
+save_to_env_file
 
 clear
 update_header
