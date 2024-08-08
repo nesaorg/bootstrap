@@ -66,7 +66,7 @@ base_env_file="$env_dir/base.env"
 config_env_file="$env_dir/.env"
 init_pwd=$PWD # so they can get back to where they started!
 status="booting" # lol not really doing anything with this currently
-ORC_PORT=33333
+ORC_PORT=31333
 #
 # basic helper functions
 #
