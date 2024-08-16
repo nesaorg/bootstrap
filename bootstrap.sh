@@ -67,6 +67,7 @@ config_env_file="$env_dir/.env"
 init_pwd=$PWD # so they can get back to where they started!
 status="booting" # lol not really doing anything with this currently
 ORC_PORT=31333
+NESA_NODE_TYPE="community"
 #
 # basic helper functions
 #
@@ -554,6 +555,7 @@ save_to_env_file() {
     update_config_var "$orchestrator_env_file" "IS_DIST" "$IS_DIST"
     update_config_var "$orchestrator_env_file" "HUGGINGFACE_API_KEY" "$HUGGINGFACE_API_KEY"
     update_config_var "$orchestrator_env_file" "MONIKER" "$MONIKER"
+    update_config_var "$orchestrator_env_file" "NESA_NODE_TYPE" "$NESA_NODE_TYPE"
 
     # Base environment variables
     update_config_var "$base_env_file" "MODEL_NAME" "$MODEL_NAME"
@@ -589,26 +591,29 @@ compose_up() {
     local compose_files="compose.yml"
     local nvidia_present=$(command -v nvidia-smi)
     local compose_ext=".yml"
-
+    
     if [[ -n "$nvidia_present" ]]; then
         compose_ext=".nvidia.yml"
     fi
+    if [[ -n "$NESA_NODE_TYPE" ]]; then
+        compose_files+=" -f compose.non-dist${compose_ext}"
+    else
+        if [[ "$IS_CHAIN" == "yes" ]] || [[ "$IS_VALIDATOR" == "yes" ]]; then
+            compose_files+=" -f compose.chain.yml"
+        fi 
 
-    if [[ "$IS_CHAIN" == "yes" ]] || [[ "$IS_VALIDATOR" == "yes" ]]; then
-        compose_files+=" -f compose.chain.yml"
-    fi 
-
-    if [[ "$IS_MINER" == "yes" ]]; then
-        if [[ "$MINER_TYPE" == "$miner_type_non_distributed" ]]; then
-            compose_files+=" -f compose.non-dist${compose_ext}"
-        elif [[ "$MINER_TYPE" == "$miner_type_distributed" ]]; then
-            if [[ "$DISTRIBUTED_TYPE" == "$distributed_type_new_swarm" ]]; then
-                compose_files+=" -f compose.bsns-c${compose_ext}"
-            elif [[ "$DISTRIBUTED_TYPE" == "$distributed_type_existing_swarm" ]]; then
-                compose_files+=" -f compose.bsns-s${compose_ext}"
+        if [[ "$IS_MINER" == "yes" ]]; then
+            if [[ "$MINER_TYPE" == "$miner_type_non_distributed" ]]; then
+                compose_files+=" -f compose.non-dist${compose_ext}"
+            elif [[ "$MINER_TYPE" == "$miner_type_distributed" ]]; then
+                if [[ "$DISTRIBUTED_TYPE" == "$distributed_type_new_swarm" ]]; then
+                    compose_files+=" -f compose.bsns-c${compose_ext}"
+                elif [[ "$DISTRIBUTED_TYPE" == "$distributed_type_existing_swarm" ]]; then
+                    compose_files+=" -f compose.bsns-s${compose_ext}"
+                fi
             fi
-        fi
-    fi 
+        fi 
+    fi
 
     docker compose -f $compose_files up --pull always -d --wait
 
