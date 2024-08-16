@@ -594,7 +594,7 @@ compose_up() {
     if [[ -n "$nvidia_present" ]]; then
         compose_ext=".nvidia.yml"
     fi
-    if [[ -n "$NESA_NODE_TYPE" ]]; then
+    if [[ "$NESA_NODE_TYPE" == "community" ]]; then
         compose_files+=" -f compose.non-dist${compose_ext}"
     else
         if [[ "$IS_CHAIN" == "yes" ]] || [[ "$IS_VALIDATOR" == "yes" ]]; then
