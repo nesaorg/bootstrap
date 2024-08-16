@@ -89,7 +89,6 @@ print_test() {
 update_header() {
     info=$(gum style "[1;38;5;${main_color}m  ${MONIKER}[0m.${domain}
   ----------------
-  [1;38;5;${main_color}mchain:         [0m${IS_CHAIN}
   [1;38;5;${main_color}mvalidator:     [0m${IS_VALIDATOR}
   [1;38;5;${main_color}mminer:         [0m${IS_MINER}
 
@@ -221,25 +220,25 @@ check_docker_installed() {
 }
 
 # TODO: handle the need for sudo here -.-
-check_nvidia_installed() {
-    if ! command_exists nvidia-smi; then
-        echo "NVIDIA drivers are not installed. Please install NVIDIA drivers and try again."
-        exit 1
-    fi
+# check_nvidia_installed() {
+#     if ! command_exists nvidia-smi; then
+#         echo "NVIDIA drivers are not installed. Please install NVIDIA drivers and try again."
+#         exit 1
+#     fi
 
-    if ! command_exists nvidia-container-runtime; then
-        sudo curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
-            && sudo curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
-            sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-            sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+#     if ! command_exists nvidia-container-runtime; then
+#         sudo curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
+#             && sudo curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+#             sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+#             sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
 
-        sudo apt-get update
-        sudo apt-get install -y nvidia-container-toolkit
+#         sudo apt-get update
+#         sudo apt-get install -y nvidia-container-toolkit
 
-        sudo nvidia-ctk runtime configure --runtime=docker
-        sudo systemctl restart docker
-    fi
-}
+#         sudo nvidia-ctk runtime configure --runtime=docker
+#         sudo systemctl restart docker
+#     fi
+# }
 
 # calculate max line length of the input
 max_line_length() {
@@ -674,7 +673,7 @@ load_from_env_file() {
     fi
 
     # defaults
-    : ${IS_CHAIN:="yes"}
+    : ${IS_CHAIN:="no"}
     : ${IS_VALIDATOR:="no"}
     : ${IS_MINER:="no"}
     : ${MINER_TYPE:=$MINER_TYPE_NONE}
@@ -699,7 +698,7 @@ PUBLIC_IP=$(curl -s ifconfig.me)
 check_gum_installed
 check_docker_installed
 check_jq_installed
-check_nvidia_installed
+# check_nvidia_installed
 detect_hardware_capabilities
 clear
 update_header
@@ -781,7 +780,7 @@ else
         previous_node_type+="$miner_string"
     fi
 
-    node_type=$(gum choose --no-limit "$chain_string" "$validator_string" "$miner_string" --selected "$previous_node_type")
+    node_type=$(gum choose --no-limit "$validator_string" "$miner_string" --selected "$previous_node_type")
 
     grep -q "$chain_string" <<<"$node_type" && IS_CHAIN="yes" || IS_CHAIN="no"
     grep -q "$validator_string" <<<"$node_type" && IS_VALIDATOR="yes" || IS_VALIDATOR="no"
@@ -795,59 +794,59 @@ else
 
     if grep -q "$validator_string" <<<"$node_type"; then
 
-        # echo -e "Please apply to be a $(gum style --foreground "$main_color" "validator") node here: https://forms.gle/3fQQHVJbHqTPpmy58"
+        echo -e "Please apply to be a $(gum style --foreground "$main_color" "validator") node here: https://forms.gle/3fQQHVJbHqTPpmy58"
 
-        download_import_key_expect
+        # download_import_key_expect
 
-        if [ ! -n "$PRIV_KEY" ]; then
-            PRIV_KEY=$(gum input --cursor.foreground "${main_color}" \
-                --password \
-                --prompt.foreground "${main_color}" \
-                --prompt "Validator's private key: " \
-                --width 80)
+        # if [ ! -n "$PRIV_KEY" ]; then
+        #     PRIV_KEY=$(gum input --cursor.foreground "${main_color}" \
+        #         --password \
+        #         --prompt.foreground "${main_color}" \
+        #         --prompt "Validator's private key: " \
+        #         --width 80)
 
-            clear
-            update_header
-            PASSWORD=$(gum input --cursor.foreground "${main_color}" \
-                --password \
-                --prompt.foreground "${main_color}" \
-                --prompt "Password for the private key: " \
-                --width 80)
+        #     clear
+        #     update_header
+        #     PASSWORD=$(gum input --cursor.foreground "${main_color}" \
+        #         --password \
+        #         --prompt.foreground "${main_color}" \
+        #         --prompt "Password for the private key: " \
+        #         --width 80)
 
-            docker pull ghcr.io/nesaorg/nesachain/nesachain:test
-            docker volume create nesachain-data
+        #     docker pull ghcr.io/nesaorg/nesachain/nesachain:test
+        #     docker volume create nesachain-data
 
-            docker run --rm -v nesachain-data:/app/.nesachain -e MONIKER="$MONIKER" -e CHAIN_ID="$CHAIN_ID" -p 26656:26656 -p 26657:26657 -p 1317:1317 -p 9090:9090 -p 2345:2345 $chain_container
+        #     docker run --rm -v nesachain-data:/app/.nesachain -e MONIKER="$MONIKER" -e CHAIN_ID="$CHAIN_ID" -p 26656:26656 -p 26657:26657 -p 1317:1317 -p 9090:9090 -p 2345:2345 $chain_container
 
-            "$WORKING_DIRECTORY/import_key.expect" "$MONIKER" "$PRIV_KEY" "$chain_container" "$PASSWORD"
+        #     "$WORKING_DIRECTORY/import_key.expect" "$MONIKER" "$PRIV_KEY" "$chain_container" "$PASSWORD"
 
-        fi
+        # fi
 
-        docker run --rm --entrypoint sh -v nesachain-data:/app/.nesachain -p 26656:26656 -p 26657:26657 -p 1317:1317 -p 9090:9090 -p 2345:2345 $chain_container -c '
-            VAL_PUB_KEY=$(nesad tendermint show-validator | jq -r ".key") && \
-            echo "VAL_PUB_KEY: $VAL_PUB_KEY" && \
-            jq -n \
-                --arg pubkey "$VAL_PUB_KEY" \
-                --arg amount "100000000000unes" \
-                --arg moniker "'"$MONIKER"'" \
-                --arg chain_id "'"$CHAIN_ID"'" \
-                --arg commission_rate "0.10" \
-                --arg commission_max_rate "0.20" \
-                --arg commission_max_change_rate "0.01" \
-                --arg min_self_delegation "1" \
-                '"'"'{
-                    pubkey: {"@type":"/cosmos.crypto.ed25519.PubKey", "key": $pubkey},
-                    amount: $amount,
-                    moniker: $moniker,
-                    "commission-rate": $commission_rate,
-                    "commission-max-rate": $commission_max_rate,
-                    "commission-max-change-rate": $commission_max_change_rate,
-                    "min-self-delegation": $min_self_delegation
-                }'"'"' > /app/.nesachain/validator.json && \
-            cat /app/.nesachain/validator.json
-        '
+        # docker run --rm --entrypoint sh -v nesachain-data:/app/.nesachain -p 26656:26656 -p 26657:26657 -p 1317:1317 -p 9090:9090 -p 2345:2345 $chain_container -c '
+        #     VAL_PUB_KEY=$(nesad tendermint show-validator | jq -r ".key") && \
+        #     echo "VAL_PUB_KEY: $VAL_PUB_KEY" && \
+        #     jq -n \
+        #         --arg pubkey "$VAL_PUB_KEY" \
+        #         --arg amount "100000000000unes" \
+        #         --arg moniker "'"$MONIKER"'" \
+        #         --arg chain_id "'"$CHAIN_ID"'" \
+        #         --arg commission_rate "0.10" \
+        #         --arg commission_max_rate "0.20" \
+        #         --arg commission_max_change_rate "0.01" \
+        #         --arg min_self_delegation "1" \
+        #         '"'"'{
+        #             pubkey: {"@type":"/cosmos.crypto.ed25519.PubKey", "key": $pubkey},
+        #             amount: $amount,
+        #             moniker: $moniker,
+        #             "commission-rate": $commission_rate,
+        #             "commission-max-rate": $commission_max_rate,
+        #             "commission-max-change-rate": $commission_max_change_rate,
+        #             "min-self-delegation": $min_self_delegation
+        #         }'"'"' > /app/.nesachain/validator.json && \
+        #     cat /app/.nesachain/validator.json
+        # '
 
-        docker run --rm --entrypoint nesad -v nesachain-data:/app/.nesachain $chain_container tx staking create-validator /app/.nesachain/validator.json --from "$MONIKER" --chain-id "$CHAIN_ID" --gas auto --gas-adjustment 1.5 --node https://rpc.test.nesa.ai
+        # docker run --rm --entrypoint nesad -v nesachain-data:/app/.nesachain $chain_container tx staking create-validator /app/.nesachain/validator.json --from "$MONIKER" --chain-id "$CHAIN_ID" --gas auto --gas-adjustment 1.5 --node https://rpc.test.nesa.ai
   
     fi
 
@@ -967,14 +966,14 @@ else
                 --prompt "Please provide your Huggingface API key: " \
                 --password \
                 --placeholder "$HUGGINGFACE_API_KEY" \
-                --width 120 \
-                --value "$HUGGINGFACE_API_KEY"
-            )
-        
-    else
-        MINER_TYPE=$miner_type_none
-        DISTRIBUTED_TYPE=$distributed_type_none
-    fi
+            --width 120 \
+            --value "$HUGGINGFACE_API_KEY"
+        )
+    
+else
+    MINER_TYPE=$miner_type_none
+    DISTRIBUTED_TYPE=$distributed_type_none
+fi
 
 fi
 
@@ -985,6 +984,12 @@ clear
 update_header
 
 display_config
+
+
+if [[ "$IS_VALIDATOR" == "yes" ]]; then
+    echo -e "Please apply to be a $(gum style --foreground "$main_color" "validator") node here: https://forms.gle/3fQQHVJbHqTPpmy58" 
+    exit 0
+fi
 
 if ! gum confirm "Do you want to start the node with the above configuration? "; then
     echo "Configuration saved. You can modify the configuration manually, run the wizard again, or you can simply use advanced wizardry to boot your node."
