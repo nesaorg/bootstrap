@@ -67,7 +67,6 @@ config_env_file="$env_dir/.env"
 init_pwd=$PWD # so they can get back to where they started!
 status="booting" # lol not really doing anything with this currently
 ORC_PORT=31333
-NESA_NODE_TYPE="community"
 #
 # basic helper functions
 #
@@ -678,6 +677,7 @@ load_from_env_file() {
     : ${IS_MINER:="no"}
     : ${MINER_TYPE:=$MINER_TYPE_NONE}
     : ${DISTRIBUTED_TYPE:=$DISTRIBUTED_TYPE_NONE}
+    : ${NESA_NODE_TYPE:="community"}
 
     # TODO: revisit below
     : ${PRIV_KEY:=""}
