@@ -595,10 +595,15 @@ save_to_env_file() {
     update_config_var "$base_env_file" "MODEL_NAME" "$MODEL_NAME"
     update_config_var "$base_env_file" "MONIKER" "$MONIKER"
     update_config_var "$base_env_file" "PUBLIC_IP" "$PUBLIC_IP"
+    update_config_var "$base_env_file" "ORC_PORT" "$ORC_PORT"
     update_config_var "$base_env_file" "NODE_OS" "$NODE_OS"
     update_config_var "$base_env_file" "NODE_ARCH" "$NODE_ARCH"
     update_config_var "$base_env_file" "NODE_CPU" "$NODE_CPU"
-    update_config_var "$base_env_file" "ORC_PORT" "$ORC_PORT"
+    update_config_var "$base_env_file" "NODE_CORES" "$NODE_CORES"
+    update_config_var "$base_env_file" "NODE_RAM" "$NODE_RAM"
+    update_config_var "$base_env_file" "NODE_GPU" "$NODE_GPU"
+    update_config_var "$base_env_file" "NODE_GPU_COUNT" "$NODE_GPU_COUNT"
+    update_config_var "$base_env_file" "NODE_VRAM" "$NODE_VRAM"
 }
 
 display_config() {
