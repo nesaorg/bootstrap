@@ -263,7 +263,7 @@ download_import_key_expect() {
 
 }
 
-et_linux_info() {
+get_linux_info() {
     local name version kernel architecture cpu cores ram disk_avail gpu gpu_count gpu_memory
     if [ -f /etc/os-release ]; then
         . /etc/os-release
