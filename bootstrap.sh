@@ -263,9 +263,8 @@ download_import_key_expect() {
 
 }
 
-
-get_linux_info() {
-    local name version kernel architecture cpu ram disk_avail gpu
+et_linux_info() {
+    local name version kernel architecture cpu cores ram disk_avail gpu gpu_count gpu_memory
     if [ -f /etc/os-release ]; then
         . /etc/os-release
         name=$NAME
@@ -277,59 +276,82 @@ get_linux_info() {
     kernel=$(uname -r)
     architecture=$(uname -m)
     cpu=$(lscpu | grep 'Model name' | awk -F: '{print $2}' | sed 's/^ *//')
+    cores=$(lscpu | grep '^CPU(s):' | awk '{print $2}')
     ram=$(free -h | grep Mem | awk '{print $2}')
     disk_avail=$(df -h --total | grep total | awk '{print $4}')
-    gpu=$(lspci | grep -i vga | awk -F: '{print $3}' | sed 's/^ *//')
+    
+    gpu=$(lspci | grep -i -e '3D controller' -e 'VGA compatible controller' | grep -i -e nvidia -e amd | awk -F: '{print $3}' | sed 's/^ *//')
+    gpu_count=$(lspci | grep -i -e '3D controller' -e 'VGA compatible controller' | grep -i -e nvidia -e amd | wc -l | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    
+    gpu_memory=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | awk '{total += $1} END {print total " MB"}')
+    
+    if [ -z "$gpu_memory" ]; then
+        gpu_memory=$(lshw -C display 2>/dev/null | grep -i size | awk '{print $2 " " $3}' | head -n 1)
+    fi
 
     NODE_OS="Linux $version"
     NODE_ARCH="$architecture"
     NODE_CPU="$cpu"
-    NODE_GPU="$gpu"
+    NODE_CORES="$cores"
+    NODE_GPU="${gpu:-NA}"
+    NODE_GPU_COUNT="${gpu_count:-0}"
     NODE_RAM="$ram"
-    NODE_VRAM="NA"
+    NODE_VRAM="${gpu_memory:-NA}"
     NODE_DISK_AVAIL="$disk_avail"
 }
 
 get_macos_info() {
-    local product_version build_version architecture cpu ram disk_avail gpu
+    local product_version build_version architecture cpu cores ram disk_avail gpu gpu_count gpu_memory
     product_version=$(sw_vers -productVersion)
     build_version=$(sw_vers -buildVersion)
     architecture=$(uname -m)
     cpu=$(sysctl -n machdep.cpu.brand_string)
+    cores=$(sysctl -n hw.ncpu)
     ram=$(sysctl -n hw.memsize | awk '{print $1/1024/1024/1024 " GB"}')
     disk_avail=$(df -h / | grep / | awk '{print $4}')
+    
     gpu=$(system_profiler SPDisplaysDataType | grep 'Chipset Model' | awk -F: '{print $2}' | sed 's/^ *//')
+    gpu_count=$(system_profiler SPDisplaysDataType | grep 'Chipset Model' | wc -l | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    gpu_memory=$(system_profiler SPDisplaysDataType | grep 'VRAM' | awk -F: '{total += $2} END {print total " MB"}' | sed 's/^ *//')
 
     NODE_OS="MacOS $product_version ($build_version)"
     NODE_ARCH="$architecture"
     NODE_CPU="$cpu"
-    NODE_GPU="$gpu"
+    NODE_CORES="$cores"
+    NODE_GPU="${gpu:-NA}"
+    NODE_GPU_COUNT="${gpu_count:-0}"
     NODE_RAM="$ram"
-    NODE_VRAM="NA"
+    NODE_VRAM="${gpu_memory:-NA}"
     NODE_DISK_AVAIL="$disk_avail"
 }
 
 get_windows_info() {
-    local caption version architecture cpu ram disk_avail gpu
+    local caption version architecture cpu cores ram disk_avail gpu gpu_count gpu_memory
     caption=$(wmic os get Caption /value | awk -F= '{print $2}')
     version=$(wmic os get Version /value | awk -F= '{print $2}')
     architecture=$(wmic os get OSArchitecture /value | awk -F= '{print $2}')
     cpu=$(wmic cpu get name /value | awk -F= '{print $2}')
+    cores=$(wmic cpu get NumberOfCores /value | awk -F= '{print $2}')
     ram=$(wmic computersystem get totalphysicalmemory /value | awk -F= '{print $2/1024/1024/1024 " GB"}')
     disk_avail=$(wmic logicaldisk get size,freespace,caption | awk '{if ($1 == "C:") print $3/1024/1024/1024 " GB"}')
+    
     gpu=$(wmic path win32_videocontroller get name /value | awk -F= '{print $2}')
+    gpu_count=$(wmic path win32_videocontroller get name /value | grep -c "Name" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    gpu_memory=$(wmic path win32_videocontroller get AdapterRAM /value | awk -F= '{total += $2} END {print total/1024/1024 " MB"}')
 
     NODE_OS="Windows $caption $version"
     NODE_ARCH="$architecture"
     NODE_CPU="$cpu"
-    NODE_GPU="$gpu"
+    NODE_CORES="$cores"
+    NODE_GPU="${gpu:-NA}"
+    NODE_GPU_COUNT="${gpu_count:-0}"
     NODE_RAM="$ram"
-    NODE_VRAM="NA"
+    NODE_VRAM="${gpu_memory:-NA}"
     NODE_DISK_AVAIL="$disk_avail"
 }
 
 get_wsl_info() {
-    local name version kernel architecture cpu ram disk_avail
+    local name version kernel architecture cpu cores ram disk_avail gpu gpu_count gpu_memory
     if [ -f /etc/os-release ]; then
         . /etc/os-release
         name=$NAME
@@ -341,17 +363,31 @@ get_wsl_info() {
     kernel=$(uname -r)
     architecture=$(uname -m)
     cpu=$(grep -m1 'model name' /proc/cpuinfo | awk -F: '{print $2}' | sed 's/^ *//')
+    cores=$(grep -c '^processor' /proc/cpuinfo)
     ram=$(free -h | grep Mem | awk '{print $2}')
     disk_avail=$(df -h --total | grep total | awk '{print $4}')
+
+    if command -v nvidia-smi &> /dev/null; then
+        gpu=$(nvidia-smi --query-gpu=name --format=csv,noheader)
+        gpu_count=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
+        gpu_memory=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | awk '{total += $1} END {print total " MB"}')
+    else
+        gpu="NA"
+        gpu_count=0
+        gpu_memory="NA"
+    fi
 
     NODE_OS="WSL $version ($kernel)"
     NODE_ARCH="$architecture"
     NODE_CPU="$cpu"
-    NODE_GPU="NA"
+    NODE_CORES="$cores"
+    NODE_GPU="${gpu:-NA}"
+    NODE_GPU_COUNT="${gpu_count:-0}"
     NODE_RAM="$ram"
-    NODE_VRAM="NA"
+    NODE_VRAM="${gpu_memory:-NA}"
     NODE_DISK_AVAIL="$disk_avail"
 }
+
 
 detect_hardware_capabilities() {
     case "$(uname -s)" in
