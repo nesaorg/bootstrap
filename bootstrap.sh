@@ -756,7 +756,7 @@ clear
 update_header
 
 if grep -q "$advanced_mode" <<<"$mode"; then
-    setup_work_dir
+    update_work_dir
     load_from_env_file "advanced"
 else
 
