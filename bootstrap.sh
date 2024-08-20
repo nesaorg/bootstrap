@@ -45,6 +45,9 @@ domain="test.nesa.sh"
 
 chain_container="ghcr.io/nesaorg/nesachain:testnet-latest"
 import_key_expect_url="https://raw.githubusercontent.com/nesaorg/bootstrap/master/import_key.expect"
+peer_id_file="/var/lib/docker/volumes/docker_agent-config/data/config/inf.id"
+
+
 miner_type_none=0
 miner_type_non_distributed=1
 miner_type_distributed=2
@@ -442,7 +445,7 @@ setup_work_dir() {
 
 update_work_dir() {
     cd "$WORKING_DIRECTORY" || {
-        echo -e "Error changing to working directory: $WORKING_DIRECTORY"
+        echo -e "Error changing to working directory: $WORKING_DIRECTORY. Make sure to run the script in Wizardy mode at least once."
         exit 1
     } 
 
@@ -611,13 +614,18 @@ display_config() {
     local config_content
 
     config_content=$(cat "$config_env_file" "$agent_env_file" "$bsns_c_env_file" "$bsns_s_env_file" "$orchestrator_env_file" "$base_env_file" | sort | uniq)
-    
+     
 
     for key in "${exclude_keys[@]}"; do
         config_content=$(echo "$config_content" | grep -v "^$key=")
     done
 
     config_content=$(echo "$config_content" | grep -v "=$")
+
+    # Append PEER_ID to the config_content
+    if [[ -n "$peer_id_value" ]]; then
+        config_content="$config_content"$'\n'"PEER_ID=$PEER_ID"
+    fi
 
     config_content="\`\`\`Makefile\n$config_content\n\`\`\`"
 
@@ -662,6 +670,16 @@ compose_up() {
         exit 1
     else
         echo "Docker Compose started successfully."
+    fi
+}
+
+load_peed_id_from_file() {
+    if [[ -f "$peer_id_file" && -s "$peer_id_file" ]]; then
+        # Read the value from the file into an environment variable
+        PEER_ID=$(cat "$peer_id_file")
+    else
+        # Set the environment variable to an empty string or default value
+        PEER_ID=""
     fi
 }
 
@@ -728,7 +746,7 @@ load_from_env_file() {
 }
 
 load_from_env_file "wizard"
-
+load_from_peer_id_file
 # don't use cached/saved values for these 
 PUBLIC_IP=$(curl -s ifconfig.me)
 
