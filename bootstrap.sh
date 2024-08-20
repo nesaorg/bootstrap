@@ -636,7 +636,7 @@ compose_up() {
     fi
 
     if [[ "$NESA_NODE_TYPE" == "community" ]]; then
-        compose_files+=" -f compose.community${compose_ext}"
+        compose_files="compose.community${compose_ext}"
     else
         if [[ "$IS_CHAIN" == "yes" ]] || [[ "$IS_VALIDATOR" == "yes" ]]; then
             compose_files+=" -f compose.chain.yml"
