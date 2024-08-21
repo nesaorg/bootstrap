@@ -17,13 +17,13 @@
 # vars
 #
 
+trap 'trap " " SIGINT SIGTERM SIGHUP; kill 0; wait; sigterm_handler' SIGINT SIGTERM SIGHUP
 
-trap "cleanup" INT
 
-cleanup() {
+sigterm_handler() {
     printf "\n Aborting node setup. Cleaning up...\n"
     # Add any additional cleanup tasks here
-    exit 1
+    echo; exit 1
 }
 
 # set -x
