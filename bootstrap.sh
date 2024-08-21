@@ -32,6 +32,7 @@ terminal_height=${terminal_size% *}
 terminal_width=${terminal_size#* }
 prompt_height=${PROMPT_HEIGHT:-1}
 main_color=43
+link_color=69
 logo=$(gum style '   ▄▄▄▄▄▄  
   ███▀▀▀██▄   
   ███   ███ 
@@ -90,10 +91,11 @@ print_test() {
 
 update_header() {
     info=$(gum style "[1;38;5;${main_color}m  ${MONIKER}[0m.${domain}
-  ----------------
+  ---------------- 
+  [1;38;5;${main_color}mid:            [0m${PEER_ID}
+  [1;38;5;${main_color}mdashboard:     [0;38;5;${link_color}mhttps://node.nesa.ai/nodes/${PEER_ID}[0m
   [1;38;5;${main_color}mvalidator:     [0m${IS_VALIDATOR}
   [1;38;5;${main_color}mminer:         [0m${IS_MINER}
-
   [1;38;5;${main_color}mstatus:        [0m${status}") 
     header=$(gum join --horizontal --align top "${logo}" '  ' "${info}")
 
