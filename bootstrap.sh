@@ -839,7 +839,7 @@ else
         previous_node_type+="$miner_string"
     fi
 
-    node_type=$(gum choose --no-limit "$validator_string" "$miner_string" --selected "$previous_node_type")
+    node_type=$(gum choose "$validator_string" "$miner_string" --selected "$previous_node_type")
 
     grep -q "$chain_string" <<<"$node_type" && IS_CHAIN="yes" || IS_CHAIN="no"
     grep -q "$validator_string" <<<"$node_type" && IS_VALIDATOR="yes" || IS_VALIDATOR="no"
