@@ -568,7 +568,6 @@ save_to_env_file() {
     update_config_var "$config_env_file" "IS_MINER" "$IS_MINER"
     update_config_var "$config_env_file" "MINER_TYPE" "$MINER_TYPE"
     update_config_var "$config_env_file" "DISTRIBUTED_TYPE" "$DISTRIBUTED_TYPE"
-    update_config_var "$config_env_file" "OP_EMAIL" "$OP_EMAIL"
 
     # Agent environment variables
     update_config_var "$agent_env_file" "VIRTUAL_HOST" "$NODE_HOSTNAME"
@@ -597,6 +596,7 @@ save_to_env_file() {
     # Base environment variables
     update_config_var "$base_env_file" "MODEL_NAME" "$MODEL_NAME"
     update_config_var "$base_env_file" "MONIKER" "$MONIKER"
+    update_config_var "$base_env_file" "OP_EMAIL" "$OP_EMAIL"
     update_config_var "$base_env_file" "PUBLIC_IP" "$PUBLIC_IP"
     update_config_var "$base_env_file" "ORC_PORT" "$ORC_PORT"
     update_config_var "$base_env_file" "NODE_OS" "$NODE_OS"
