@@ -45,7 +45,7 @@ domain="test.nesa.sh"
 
 chain_container="ghcr.io/nesaorg/nesachain:testnet-latest"
 import_key_expect_url="https://raw.githubusercontent.com/nesaorg/bootstrap/master/import_key.expect"
-peer_id_file="HOME/.nesa/identity/inf.id"
+peer_id_file="HOME/.nesa/identity/peer_id.id"
 
 
 miner_type_none=0
@@ -622,8 +622,7 @@ display_config() {
 
     config_content=$(echo "$config_content" | grep -v "=$")
 
-    # Append PEER_ID to the config_content
-    if [[ -n "$peer_id_value" ]]; then
+    if [[ -n "$PEER_ID" ]]; then
         config_content="$config_content"$'\n'"PEER_ID=$PEER_ID"
     fi
 
@@ -674,7 +673,7 @@ compose_up() {
 }
 
 load_peed_id_from_file() {
-    if [[ -f "$peer_id_file" && -s "$peer_id_file" ]]; then
+    if [[ -f "$peer_id_file" ]]; then
         # Read the value from the file into an environment variable
         PEER_ID=$(cat "$peer_id_file")
     else
@@ -1033,6 +1032,7 @@ else
 else
     MINER_TYPE=$miner_type_none
     DISTRIBUTED_TYPE=$distributed_type_none
+    IS_DIST=False
 fi
 
 fi
