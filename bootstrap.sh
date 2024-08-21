@@ -672,7 +672,7 @@ compose_up() {
     fi
 }
 
-load_peed_id_from_file() {
+load_peer_id() {
     if [[ -f "$peer_id_file" ]]; then
         # Read the value from the file into an environment variable
         PEER_ID=$(cat "$peer_id_file")
@@ -745,7 +745,7 @@ load_from_env_file() {
 }
 
 load_from_env_file "wizard"
-load_from_peer_id_file
+load_peer_id
 # don't use cached/saved values for these 
 PUBLIC_IP=$(curl -s ifconfig.me)
 
