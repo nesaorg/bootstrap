@@ -45,7 +45,7 @@ domain="test.nesa.sh"
 
 chain_container="ghcr.io/nesaorg/nesachain:testnet-latest"
 import_key_expect_url="https://raw.githubusercontent.com/nesaorg/bootstrap/master/import_key.expect"
-peer_id_file="HOME/.nesa/identity/peer_id.id"
+peer_id_file="$HOME/.nesa/identity/peer_id.id"
 
 
 miner_type_none=0
