@@ -92,7 +92,7 @@ print_test() {
 update_header() {
     info=$(gum style "[1;38;5;${main_color}m  ${MONIKER}[0m.${domain}
   ---------------- 
-  [1;38;5;${main_color}mid:            [0m${PEER_ID}
+  [1;38;5;${main_color}mnode_id:       [0m${PEER_ID}
   [1;38;5;${main_color}mdashboard:     [0;38;5;${link_color}mhttps://node.nesa.ai/nodes/${PEER_ID}[0m
   [1;38;5;${main_color}mvalidator:     [0m${IS_VALIDATOR}
   [1;38;5;${main_color}mminer:         [0m${IS_MINER}
