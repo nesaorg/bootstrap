@@ -26,7 +26,7 @@ While the private key is not currently utilized on the testnet, it will be requi
 ### 3. How do I find my node's ID (formerly public_key/peer_id)?
 Re-run the bootstrap script in advanced mode, and check the header for your node ID and dashboard link. This ID is used by our networking stack and for rewards on the testnet. It can be found in the header of the bootstrap script and the last prompt where it shows the entire config before bootstrapping your node. There is also a link directly to your node's dashboard, but you can also visit [https://nodes.nesa.ai](https://nodes.nesa.ai) and search for your node by its node ID.
 
-The following image shows the node id in the header of the bootstrap script, and the node id in both the header and the config preview presented before finalizing the bootstrapping process. [![Node ID in the bootstrap script]](https://raw.githubusercontent.com/nesaorg/bootstrap/master/images/node_id.png)
+The following image shows the node id in the header of the bootstrap script, and the node id in both the header and the config preview presented before finalizing the bootstrapping process. ![Node ID in the bootstrap script](https://raw.githubusercontent.com/nesaorg/bootstrap/master/images/node_id.png)
 
 ### 4. I installed the validator, but I want to run a miner instead. What should I do?
 Currently, we are not onboarding validators. We recommend focusing on running a miner instead. Re-run the bootstrap script, select the miner option, and ensure that you only select miner. The updated script no longer requires using the spacebar for multiple selections; simply pressing enter will select the option.
