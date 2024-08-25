@@ -46,7 +46,7 @@ domain="test.nesa.sh"
 
 chain_container="ghcr.io/nesaorg/nesachain:testnet-latest"
 import_key_expect_url="https://raw.githubusercontent.com/nesaorg/bootstrap/master/import_key.expect"
-peer_id_file="$HOME/.nesa/identity/peer_id.id"
+node_id_file="$HOME/.nesa/identity/node_id.id"
 
 
 miner_type_none=0
@@ -92,13 +92,14 @@ print_test() {
 update_header() {
     info=$(gum style "[1;38;5;${main_color}m  ${MONIKER}[0m.${domain}
   ---------------- 
-  [1;38;5;${main_color}mnode_id:       [0m${PEER_ID}
-  [1;38;5;${main_color}mdashboard:     [0;38;5;${link_color}mhttps://node.nesa.ai/nodes/${PEER_ID}[0m
+  [1;38;5;${main_color}mnode id:       [0m${NODE_ID}
+  [1;38;5;${main_color}mdashboard:     [0;38;5;${link_color}mhttps://node.nesa.ai/nodes/${NODE_ID}[0m
   [1;38;5;${main_color}mvalidator:     [0m${IS_VALIDATOR}
   [1;38;5;${main_color}mminer:         [0m${IS_MINER}
   [1;38;5;${main_color}mstatus:        [0m${status}") 
     header=$(gum join --horizontal --align top "${logo}" '  ' "${info}")
 
+    echo -e "\n"
     print_test "${header}"
     echo -e "\n"
 }
@@ -624,8 +625,8 @@ display_config() {
 
     config_content=$(echo "$config_content" | grep -v "=$")
 
-    if [[ -n "$PEER_ID" ]]; then
-        config_content="$config_content"$'\n'"PEER_ID=$PEER_ID"
+    if [[ -n "$NODE_ID" ]]; then
+        config_content="$config_content"$'\n'"NODE_ID=$NODE_ID"
     fi
 
     config_content="\`\`\`Makefile\n$config_content\n\`\`\`"
@@ -674,13 +675,13 @@ compose_up() {
     fi
 }
 
-load_peer_id() {
-    if [[ -f "$peer_id_file" ]]; then
+load_node_id() {
+    if [[ -f "$node_id_file" ]]; then
         # Read the value from the file into an environment variable
-        PEER_ID=$(cat "$peer_id_file")
+        NODE_ID=$(cat "$node_id_file")
     else
         # Set the environment variable to an empty string or default value
-        PEER_ID=""
+        NODE_ID=""
     fi
 }
 
@@ -747,7 +748,7 @@ load_from_env_file() {
 }
 
 load_from_env_file "wizard"
-load_peer_id
+load_node_id
 # don't use cached/saved values for these 
 PUBLIC_IP=$(curl -s ifconfig.me)
 
