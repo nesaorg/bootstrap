@@ -29,7 +29,7 @@ Re-run the bootstrap script in advanced mode, and check the header for your node
 The following image shows the node id in the header of the bootstrap script, and the node id in both the header and the config preview presented before finalizing the bootstrapping process. ![Node ID in the bootstrap script](https://raw.githubusercontent.com/nesaorg/bootstrap/master/images/node_id.png)
 
 ### 4. I installed the validator, but I want to run a miner instead. What should I do?
-Currently, we are not onboarding validators. We recommend focusing on running a miner instead. Re-run the bootstrap script, select the miner option, and ensure that you only select miner. The updated script no longer requires using the spacebar for multiple selections; simply pressing enter will select the option.
+Currently, we are not onboarding validators. We recommend focusing on running a miner instead. Re-run the bootstrap script, select the miner option, and ensure that you only select miner.
 
 ### 5. What’s the difference between a Distributed Miner and a Non-Distributed Miner?
 - **Distributed Miner:** Joins existing swarms for collaborative mining, splitting the model into blocks and running inference on a sequence of miners. You can either join an existing swarm or start a new one.
