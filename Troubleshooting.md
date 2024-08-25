@@ -1,5 +1,3 @@
-Here's the `Troubleshooting.md` in plain markdown format:
-
 # Troubleshooting
 
 ### 1. I have an NVIDIA GPU, but I'm seeing this error:
@@ -62,4 +60,5 @@ Here's the `Troubleshooting.md` in plain markdown format:
   ```
   Paste the output in a support ticket on Discord for further assistance.
 
-This should be all set for you to copy and paste into your `Troubleshooting.md` file!
+
+Disclaimer: My LLM supervisor that runs on nesa network formatted this as markdown🤞
