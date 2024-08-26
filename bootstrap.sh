@@ -749,6 +749,7 @@ load_from_env_file() {
     : ${MINER_TYPE:=$MINER_TYPE_NONE}
     : ${DISTRIBUTED_TYPE:=$DISTRIBUTED_TYPE_NONE}
     : ${NESA_NODE_TYPE:="community"}
+    : ${MONIKER:-$(hostname -s)}
 
     # TODO: revisit below
     : ${PRIV_KEY:=""}
@@ -759,7 +760,7 @@ load_from_env_file() {
 load_from_env_file "wizard"
 load_node_id
 # don't use cached/saved values for these 
-PUBLIC_IP=$(curl -4 ifconfig.me)
+PUBLIC_IP=$(curl -s4 ifconfig.me)
 
 #
 # bootstrap core logic
@@ -790,7 +791,6 @@ if grep -q "$advanced_mode" <<<"$mode"; then
 else
 
 
-    MONIKER=${MONIKER:-$(hostname -s)}
     MONIKER=$(gum input --cursor.foreground "${main_color}" \
         --prompt.foreground "${main_color}" \
         --prompt "Choose a moniker for your node: " \
