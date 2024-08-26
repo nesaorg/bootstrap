@@ -90,10 +90,18 @@ print_test() {
 }
 
 update_header() {
+    local dashboard_url
+
+    if [[ "$NODE_ID" == "pending..." ]]; then
+        dashboard_url="https://nodes.nesa.ai"
+    else
+        dashboard_url="https://nodes.nesa.ai/nodes/$NODE_ID"
+    fi
+    
     info=$(gum style "[1;38;5;${main_color}m  ${MONIKER}[0m.${domain}
   ---------------- 
   [1;38;5;${main_color}mnode id:       [0m${NODE_ID}
-  [1;38;5;${main_color}mdashboard:     [0;38;5;${link_color}mhttps://node.nesa.ai/nodes/${NODE_ID}[0m
+  [1;38;5;${main_color}mdashboard:     [0;38;5;${link_color}m$dashboard_url[0m
   [1;38;5;${main_color}mvalidator:     [0m${IS_VALIDATOR}
   [1;38;5;${main_color}mminer:         [0m${IS_MINER}
   [1;38;5;${main_color}mstatus:        [0m${status}") 
@@ -556,7 +564,7 @@ update_config_var() {
         # Use a temporary file to handle sed differences
         sed "s|^$var=.*|$var=$value|" "$file" > "$temp_file" && mv "$temp_file" "$file"
     else
-        echo "$var=$value" >> "$file"
+        echo "$var=\"$value\"" >> "$file"
     fi
 
     # Clean up the temporary file if it still exists
@@ -625,7 +633,8 @@ display_config() {
 
     config_content=$(echo "$config_content" | grep -v "=$")
 
-    if [[ -n "$NODE_ID" ]]; then
+
+    if [[ -n "$NODE_ID" && "$NODE_ID" != "pending..." ]]; then
         config_content="$config_content"$'\n'"NODE_ID=$NODE_ID"
     fi
 
@@ -681,7 +690,7 @@ load_node_id() {
         NODE_ID=$(cat "$node_id_file")
     else
         # Set the environment variable to an empty string or default value
-        NODE_ID=""
+        NODE_ID="pending..."
     fi
 }
 
