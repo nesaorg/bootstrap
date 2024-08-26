@@ -29,6 +29,8 @@ Before running the bootstrap script, ensure your system meets the following requ
 - **Network**: Stable internet connection
 - **GPU**: CUDA-enabled GPUs recommended. MPS is also supported. CPU mining is available, but not for all models.
 
+**note**: For the testnet miner campain, we highly encourage closer to 16GB of RAM and 100GB of disk space. This is due to the nature of the testnet and the need to test the capabilities of the network.
+
 ### Software Requirements
 
 - **Operating System**: Ubuntu, Debian, CentOS, macOS, Windows (with WSL). Other Linux distributions may work but are not officially supported.
