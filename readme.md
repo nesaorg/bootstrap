@@ -1,5 +1,7 @@
 # Nesa Bootstrap
 
+![Nesa Bootstrap Process](https://raw.githubusercontent.com/nesaorg/bootstrap/master/images/bootstrap.gif)
+
 Welcome to the official repository for the Nesa Bootstrap script! This repository contains the necessary tools and scripts to set up and configure your Nesa node efficiently.
 
 ## Overview
