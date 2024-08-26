@@ -750,7 +750,7 @@ load_from_env_file() {
 load_from_env_file "wizard"
 load_node_id
 # don't use cached/saved values for these 
-PUBLIC_IP=$(curl -s ifconfig.me)
+PUBLIC_IP=$(curl -4 ifconfig.me)
 
 #
 # bootstrap core logic
