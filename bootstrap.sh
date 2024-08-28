@@ -93,9 +93,9 @@ update_header() {
     local dashboard_url
 
     if [[ "$NODE_ID" == "pending..." ]]; then
-        dashboard_url="https://nodes.nesa.ai"
+        dashboard_url="https://node.nesa.ai"
     else
-        dashboard_url="https://nodes.nesa.ai/nodes/$NODE_ID"
+        dashboard_url="https://node.nesa.ai/nodes/$NODE_ID"
     fi
     
     info=$(gum style "[1;38;5;${main_color}m  ${MONIKER}[0m.${domain}
