@@ -32,33 +32,27 @@ Backspace 7
 Type "homer"
 Sleep 1.5s
 Enter
-Sleep 1s
+Sleep 1.5s
 Backspace 26
 Type "chunkylover53@aol.com"
-Sleep 1s
-Enter
-Sleep 1s
-Type@0s "nesa1j6y248qnuawdnd7dtc3hg47jlzfj3jzwqv8rkq"
-Sleep 2s
-Enter
-Sleep 500ms
-Up
-Sleep 750ms
-Down
-Sleep 1s
-Enter
-Sleep 2s
-Type@0s "02232faebd602379e734370520fd3102b0288335cbd17c2ddc60ca5ff038bd0398"
 Sleep 1.5s
 Enter
-Sleep 1s
+Sleep 1.5s
+Type@0s "nesa1j6y248qnuawdnd7dtc3hg47jlzfj3jzwqv8rkq"
+Sleep 1.5s
+Enter
+Sleep 1.5s
 Type@0s "hf_blahblahblahblahblahblahblahblahaa"
-Sleep 750ms
+Sleep 1.5s
 Enter
-Sleep 500ms
+Sleep 1.5s
+Type@0s "02232faebd602379e734370520fd3102b0288335cbd17c2ddc60ca5ff038bd0398"
+Sleep 4s
+Enter
+Sleep 1s
 Right
-Sleep 500ms
+Sleep 1s
 Left
-Sleep 250ms
+Sleep 1s
 Enter
-Sleep 25s
+Sleep 15s
