@@ -600,6 +600,7 @@ save_to_env_file() {
     update_config_var "$base_env_file" "MODEL_NAME" "$MODEL_NAME"
     update_config_var "$base_env_file" "MONIKER" "$MONIKER"
     update_config_var "$base_env_file" "OP_EMAIL" "$OP_EMAIL"
+    update_config_var "$base_env_file" "REF_CODE" "$REF_CODE"
     update_config_var "$base_env_file" "PUBLIC_IP" "$PUBLIC_IP"
     update_config_var "$base_env_file" "ORC_PORT" "$ORC_PORT"
     update_config_var "$base_env_file" "NODE_OS" "$NODE_OS"
@@ -751,6 +752,7 @@ load_from_env_file() {
     : ${PRIV_KEY:=""}
     : ${HUGGINGFACE_API_KEY:=""}
     : ${MODEL_NAME:=""}
+    : ${REF_CODE:=""}
 }
 
 load_from_env_file "wizard"
@@ -819,6 +821,14 @@ else
         --placeholder "$OP_EMAIL" \
         --width 80 \
         --value "$OP_EMAIL")
+
+
+    REF_CODE=$(gum input --cursor.foreground "${main_color}" \
+        --prompt.foreground "${main_color}" \
+        --prompt "If you have a referral code, enter it here: " \
+        --placeholder "$REF_CODE" \
+        --width 80 \
+        --value "$REF_CODE")
 
     clear
     update_header
