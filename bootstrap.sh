@@ -438,8 +438,11 @@ setup_work_dir() {
         exit 1
     }
 
+    setup_docker_repository
+}
 
-    # Clone or pull the latest changes if the repo already exists
+setup_docker_repository() {
+        # Clone or pull the latest changes if the repo already exists
     if [ ! -d "docker" ]; then
         gum spin -s line --title "Cloning the nesaorg/docker repository..." -- git clone https://github.com/nesaorg/docker.git
     else
@@ -455,21 +458,6 @@ setup_work_dir() {
         echo "Error: Docker directory does not exist."
         exit 1
     fi
-}
-
-
-update_work_dir() {
-    cd "$WORKING_DIRECTORY" || {
-        echo -e "Error changing to working directory: $WORKING_DIRECTORY. Make sure to run the script in Wizardy mode at least once."
-        exit 1
-    } 
-
-    if [ -d "docker" ]; then
-        cd docker
-        gum spin -s line --title "Pulling latest updates from nesaorg/docker repository..." -- git pull
-        cd ..
-    fi
-
 }
 
 get_swarms_map() {
@@ -654,6 +642,11 @@ compose_up() {
     local nvidia_present=$(command -v nvidia-smi)
     local compose_ext=".yml"
     
+    cd "$WORKING_DIRECTORY/docker" || {
+        echo "Error: Docker directory does not exist."
+        exit 1
+    }
+
     if [[ -n "$nvidia_present" ]]; then
         compose_ext=".nvidia.yml"
     fi
@@ -788,8 +781,10 @@ mode=$(gum choose "$wizard_mode" "$advanced_mode")
 clear
 update_header
 
+gum spin -s line --title "Setting up working directory and cloning node repository..." -- setup_work_dir
+setup_work_dir
+
 if grep -q "$advanced_mode" <<<"$mode"; then
-    update_work_dir
     load_from_env_file "advanced"
 else
 
@@ -863,12 +858,11 @@ else
     clear
     update_header
 
-    gum spin -s line --title "Setting up working directory and cloning node repository..." -- setup_work_dir
-    setup_work_dir
-
     if grep -q "$validator_string" <<<"$node_type"; then
-
-        echo -e "Please apply to be a $(gum style --foreground "$main_color" "validator") node here: https://forms.gle/3fQQHVJbHqTPpmy58"
+        
+        echo -e "We are only bootstrapping miner nodes at the moment."
+        echo -e "Please apply to run a $(gum style --foreground "$main_color" "validator") node here: https://forms.gle/3fQQHVJbHqTPpmy58"
+        exit 1
 
         # download_import_key_expect
 
@@ -1063,18 +1057,13 @@ update_header
 display_config
 
 
-if [[ "$IS_VALIDATOR" == "yes" ]]; then
-    echo -e "Please apply to be a $(gum style --foreground "$main_color" "validator") node here: https://forms.gle/3fQQHVJbHqTPpmy58" 
-    exit 0
-fi
-
 if ! gum confirm "Do you want to start the node with the above configuration? "; then
     echo "Configuration saved. You can modify the configuration manually, run the wizard again, or you can simply use advanced wizardry to boot your node."
     exit 0
 fi
 
 cd "$WORKING_DIRECTORY/docker" || {
-    echo -e "Error changing to working directory: $WORKING_DIRECTORY/docker"
+    echo "Error: Docker directory does not exist."
     exit 1
 }
 
