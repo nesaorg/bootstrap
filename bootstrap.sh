@@ -834,110 +834,18 @@ else
         --width 160 \
         --value "$REF_CODE")
 
-    clear
-    update_header
 
-    echo -e "Now, what type(s) of node is $(gum style --foreground "$main_color" "$MONIKER")? (use space to select which type(s)"
-
-    chain_string="Base"
-    validator_string="Validator"
-    miner_string="Miner"
-
-    previous_node_type="$chain_string"
-
-    if [[ "$IS_CHAIN" == "yes" ]]; then
-        previous_node_type="$chain_string"
-    fi
-
-    if [[ "$IS_VALIDATOR" == "yes" ]]; then
-        if [[ -n "$previous_node_type" ]]; then
-            previous_node_type+=","
-        fi
-        previous_node_type+="$validator_string"
-    fi
-
-    if [[ "$IS_MINER" == "yes" ]]; then
-        if [[ -n "$previous_node_type" ]]; then
-            previous_node_type+=","
-        fi
-        previous_node_type+="$miner_string"
-    fi
-
-    node_type=$(gum choose "$validator_string" "$miner_string" --selected "$previous_node_type")
-
-    grep -q "$chain_string" <<<"$node_type" && IS_CHAIN="yes" || IS_CHAIN="no"
-    grep -q "$validator_string" <<<"$node_type" && IS_VALIDATOR="yes" || IS_VALIDATOR="no"
-    grep -q "$miner_string" <<<"$node_type" && IS_MINER="yes" || IS_MINER="no"
-
-    clear
-    update_header
-
-    if grep -q "$validator_string" <<<"$node_type"; then
-        
-        echo -e "We are only bootstrapping miner nodes at the moment."
-        echo -e "Please apply to run a $(gum style --foreground "$main_color" "validator") node here: https://forms.gle/3fQQHVJbHqTPpmy58"
-        exit 1
-
-        # download_import_key_expect
-
-        # if [ ! -n "$PRIV_KEY" ]; then
-        #     PRIV_KEY=$(gum input --cursor.foreground "${main_color}" \
-        #         --password \
-        #         --prompt.foreground "${main_color}" \
-        #         --prompt "Validator's private key: " \
-        #         --width 80)
-
-        #     clear
-        #     update_header
-        #     PASSWORD=$(gum input --cursor.foreground "${main_color}" \
-        #         --password \
-        #         --prompt.foreground "${main_color}" \
-        #         --prompt "Password for the private key: " \
-        #         --width 80)
-
-        #     docker pull ghcr.io/nesaorg/nesachain/nesachain:test
-        #     docker volume create nesachain-data
-
-        #     docker run --rm -v nesachain-data:/app/.nesachain -e MONIKER="$MONIKER" -e CHAIN_ID="$CHAIN_ID" -p 26656:26656 -p 26657:26657 -p 1317:1317 -p 9090:9090 -p 2345:2345 $chain_container
-
-        #     "$WORKING_DIRECTORY/import_key.expect" "$MONIKER" "$PRIV_KEY" "$chain_container" "$PASSWORD"
-
-        # fi
-
-        # docker run --rm --entrypoint sh -v nesachain-data:/app/.nesachain -p 26656:26656 -p 26657:26657 -p 1317:1317 -p 9090:9090 -p 2345:2345 $chain_container -c '
-        #     VAL_PUB_KEY=$(nesad tendermint show-validator | jq -r ".key") && \
-        #     echo "VAL_PUB_KEY: $VAL_PUB_KEY" && \
-        #     jq -n \
-        #         --arg pubkey "$VAL_PUB_KEY" \
-        #         --arg amount "100000000000unes" \
-        #         --arg moniker "'"$MONIKER"'" \
-        #         --arg chain_id "'"$CHAIN_ID"'" \
-        #         --arg commission_rate "0.10" \
-        #         --arg commission_max_rate "0.20" \
-        #         --arg commission_max_change_rate "0.01" \
-        #         --arg min_self_delegation "1" \
-        #         '"'"'{
-        #             pubkey: {"@type":"/cosmos.crypto.ed25519.PubKey", "key": $pubkey},
-        #             amount: $amount,
-        #             moniker: $moniker,
-        #             "commission-rate": $commission_rate,
-        #             "commission-max-rate": $commission_max_rate,
-        #             "commission-max-change-rate": $commission_max_change_rate,
-        #             "min-self-delegation": $min_self_delegation
-        #         }'"'"' > /app/.nesachain/validator.json && \
-        #     cat /app/.nesachain/validator.json
-        # '
-
-        # docker run --rm --entrypoint nesad -v nesachain-data:/app/.nesachain $chain_container tx staking create-validator /app/.nesachain/validator.json --from "$MONIKER" --chain-id "$CHAIN_ID" --gas auto --gas-adjustment 1.5 --node https://rpc.test.nesa.ai
-  
-    fi
-
-    if grep -q "$miner_string" <<<"$node_type"; then        
-        clear
-        update_header 
+    HUGGINGFACE_API_KEY=$(
+            gum input --cursor.foreground "${main_color}" \
+                --prompt.foreground "${main_color}" \
+                --prompt "Please provide your Huggingface API key: " \
+                --password \
+                --placeholder "$HUGGINGFACE_API_KEY" \
+            --width 160 \
+            --value "$HUGGINGFACE_API_KEY"
+        )
 
         prompt_for_node_pk=0
-
         if [ -n "$NODE_PRIV_KEY" ]; then
             if ! gum confirm "Do you want to use the existing private key? "; then
                 prompt_for_node_pk=1
@@ -954,10 +862,113 @@ else
                 --width 160)
         fi
 
+
+    clear
+    update_header
+
+
+
+
+    if [[ "$NESA_NODE_TYPE" == "nesa" ]]; then
+
+        echo -e "Now, what type(s) of node is $(gum style --foreground "$main_color" "$MONIKER")? (use space to select which type(s)"
+
+        chain_string="Base"
+        validator_string="Validator"
+        miner_string="Miner"
+
+        previous_node_type="$chain_string"
+
+        if [[ "$IS_CHAIN" == "yes" ]]; then
+            previous_node_type="$chain_string"
+        fi
+
+        if [[ "$IS_VALIDATOR" == "yes" ]]; then
+            if [[ -n "$previous_node_type" ]]; then
+                previous_node_type+=","
+            fi
+            previous_node_type+="$validator_string"
+        fi
+
+        if [[ "$IS_MINER" == "yes" ]]; then
+            if [[ -n "$previous_node_type" ]]; then
+                previous_node_type+=","
+            fi
+            previous_node_type+="$miner_string"
+        fi
+
+        node_type=$(gum choose "$validator_string" "$miner_string" --selected "$previous_node_type")
+
+        grep -q "$chain_string" <<<"$node_type" && IS_CHAIN="yes" || IS_CHAIN="no"
+        grep -q "$validator_string" <<<"$node_type" && IS_VALIDATOR="yes" || IS_VALIDATOR="no"
+        grep -q "$miner_string" <<<"$node_type" && IS_MINER="yes" || IS_MINER="no"
+
         clear
         update_header
 
-        if [[ "$NESA_NODE_TYPE" == "nesa" ]]; then
+        if grep -q "$validator_string" <<<"$node_type"; then
+            
+            echo -e "We are only bootstrapping miner nodes at the moment."
+            echo -e "Please apply to run a $(gum style --foreground "$main_color" "validator") node here: https://forms.gle/3fQQHVJbHqTPpmy58"
+            exit 1
+
+            # download_import_key_expect
+
+            # if [ ! -n "$PRIV_KEY" ]; then
+            #     PRIV_KEY=$(gum input --cursor.foreground "${main_color}" \
+            #         --password \
+            #         --prompt.foreground "${main_color}" \
+            #         --prompt "Validator's private key: " \
+            #         --width 80)
+
+            #     clear
+            #     update_header
+            #     PASSWORD=$(gum input --cursor.foreground "${main_color}" \
+            #         --password \
+            #         --prompt.foreground "${main_color}" \
+            #         --prompt "Password for the private key: " \
+            #         --width 80)
+
+            #     docker pull ghcr.io/nesaorg/nesachain/nesachain:test
+            #     docker volume create nesachain-data
+
+            #     docker run --rm -v nesachain-data:/app/.nesachain -e MONIKER="$MONIKER" -e CHAIN_ID="$CHAIN_ID" -p 26656:26656 -p 26657:26657 -p 1317:1317 -p 9090:9090 -p 2345:2345 $chain_container
+
+            #     "$WORKING_DIRECTORY/import_key.expect" "$MONIKER" "$PRIV_KEY" "$chain_container" "$PASSWORD"
+
+            # fi
+
+            # docker run --rm --entrypoint sh -v nesachain-data:/app/.nesachain -p 26656:26656 -p 26657:26657 -p 1317:1317 -p 9090:9090 -p 2345:2345 $chain_container -c '
+            #     VAL_PUB_KEY=$(nesad tendermint show-validator | jq -r ".key") && \
+            #     echo "VAL_PUB_KEY: $VAL_PUB_KEY" && \
+            #     jq -n \
+            #         --arg pubkey "$VAL_PUB_KEY" \
+            #         --arg amount "100000000000unes" \
+            #         --arg moniker "'"$MONIKER"'" \
+            #         --arg chain_id "'"$CHAIN_ID"'" \
+            #         --arg commission_rate "0.10" \
+            #         --arg commission_max_rate "0.20" \
+            #         --arg commission_max_change_rate "0.01" \
+            #         --arg min_self_delegation "1" \
+            #         '"'"'{
+            #             pubkey: {"@type":"/cosmos.crypto.ed25519.PubKey", "key": $pubkey},
+            #             amount: $amount,
+            #             moniker: $moniker,
+            #             "commission-rate": $commission_rate,
+            #             "commission-max-rate": $commission_max_rate,
+            #             "commission-max-change-rate": $commission_max_change_rate,
+            #             "min-self-delegation": $min_self_delegation
+            #         }'"'"' > /app/.nesachain/validator.json && \
+            #     cat /app/.nesachain/validator.json
+            # '
+
+            # docker run --rm --entrypoint nesad -v nesachain-data:/app/.nesachain $chain_container tx staking create-validator /app/.nesachain/validator.json --from "$MONIKER" --chain-id "$CHAIN_ID" --gas auto --gas-adjustment 1.5 --node https://rpc.test.nesa.ai
+    
+        fi
+
+        if grep -q "$miner_string" <<<"$node_type"; then        
+            clear
+            update_header
 
             echo -e "Now, what type of miner will $(gum style --foreground "$main_color" "$MONIKER") be?"
             distributed_string="Distributed Miner"
@@ -1042,23 +1053,12 @@ else
         
             fi
             clear
-            update_header
+            update_header    
+        else
+            MINER_TYPE=$miner_type_agnostic
+            DISTRIBUTED_TYPE=$distributed_type_agnostic
+            IS_DIST=False
         fi
-    
-        HUGGINGFACE_API_KEY=$(
-            gum input --cursor.foreground "${main_color}" \
-                --prompt.foreground "${main_color}" \
-                --prompt "Please provide your Huggingface API key: " \
-                --password \
-                --placeholder "$HUGGINGFACE_API_KEY" \
-            --width 160 \
-            --value "$HUGGINGFACE_API_KEY"
-        )
-    
-    else
-        MINER_TYPE=$miner_type_agnostic
-        DISTRIBUTED_TYPE=$distributed_type_agnostic
-        IS_DIST=False
     fi
 fi
 
