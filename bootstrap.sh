@@ -802,17 +802,21 @@ else
 
     clear
     update_header
-    
-    NODE_HOSTNAME=${NODE_HOSTNAME:-"$MONIKER.yourdomain.tld"}
-    NODE_HOSTNAME=$(gum input --cursor.foreground "${main_color}" \
-        --prompt.foreground "${main_color}" \
-        --prompt "What will $(gum style --foreground "main_color" "$MONIKER")'s hostname be? " \
-        --placeholder "$NODE_HOSTNAME" \
-        --width 80 \
-        --value "$NODE_HOSTNAME")
 
-    clear
-    update_header
+    if [[ "$NESA_NODE_TYPE" == "nesa" ]]; then 
+        NODE_HOSTNAME=${NODE_HOSTNAME:-"$MONIKER.yourdomain.tld"}
+        NODE_HOSTNAME=$(gum input --cursor.foreground "${main_color}" \
+            --prompt.foreground "${main_color}" \
+            --prompt "What will $(gum style --foreground "main_color" "$MONIKER")'s hostname be? " \
+            --placeholder "$NODE_HOSTNAME" \
+            --width 80 \
+            --value "$NODE_HOSTNAME")
+
+        clear
+        update_header
+    else
+        NODE_HOSTNAME=${NODE_HOSTNAME:-"$MONIKER"}
+    fi
 
     OP_EMAIL=${OP_EMAIL:-"admin@$NODE_HOSTNAME"}
     OP_EMAIL=$(gum input --cursor.foreground "${main_color}" \
@@ -825,9 +829,9 @@ else
 
     REF_CODE=$(gum input --cursor.foreground "${main_color}" \
         --prompt.foreground "${main_color}" \
-        --prompt "If you have a referral code, enter it here: " \
-        --placeholder "$REF_CODE" \
-        --width 80 \
+        --prompt "if you have a referral code, enter it here to receive bonus points: " \
+        --placeholder "nesa1j6y248qnuawdnd7dtc3hg47jlzfj3jzwqv8rkq" \
+        --width 160 \
         --value "$REF_CODE")
 
     clear
@@ -947,7 +951,7 @@ else
                 --password \
                 --prompt.foreground "${main_color}" \
                 --prompt "Node's wallet private key: " \
-                --width 80)
+                --width 160)
         fi
 
         clear
@@ -1031,7 +1035,7 @@ else
                         --prompt.foreground "${main_color}" \
                         --prompt "Which model would you like to run? " \
                         --placeholder "nlptown/bert-base-multilingual-uncased-sentiment" \
-                        --width 120 \
+                        --width 160 \
                         --value "$MODEL_NAME"
                 )
                 
@@ -1047,7 +1051,7 @@ else
                 --prompt "Please provide your Huggingface API key: " \
                 --password \
                 --placeholder "$HUGGINGFACE_API_KEY" \
-            --width 120 \
+            --width 160 \
             --value "$HUGGINGFACE_API_KEY"
         )
     
