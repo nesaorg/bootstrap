@@ -44,6 +44,7 @@ Before starting the bootstrap script, you’ll need to have the following inform
 
 - **Private Key**: Required for registering your miner and receiving rewards. Refer to the [FAQ](./FAQ.md#2-why-do-i-need-to-provide-a-private-key-when-setting-up-a-miner-node) on how to obtain your private key.
 - **Hugging Face API Key**: Necessary for accessing models hosted on Hugging Face. Refer to the [FAQ](./FAQ.md#7-how-do-i-obtain-a-hugging-face-api-key) on how to obtain an API key.
+- **Referral Code** (optional): If you were referred by another user, have their wallet address or public key hex ready.
 
 Having these ready will ensure a smooth and efficient configuration process.
 
@@ -60,8 +61,7 @@ bash <(curl -s https://raw.githubusercontent.com/nesaorg/bootstrap/master/bootst
 1. **Choose a Moniker**: Provide a unique name for your node.
 2. **Select Node Type**: Decide whether your node will act as a Validator or Miner. See below for details on each type.
 3. **Provide Wallet Private Key**: Enter your wallet private key for validator staking, miner registration, and to receive rewards.
-4. **Setup Swarm (if applicable)**: For Distributed Miners, choose to join an existing swarm or start a new one.
-5. **Model Selection**: Select the model you want your miner node to run. You can choose from supported models or specify a custom one based on your hardware capabilities.
+4. **Enter Referral Code** (optional): If applicable, provide the referral code.
 6. **Finalize Configuration**: Review and confirm the configuration before starting your node. The bootstrap script will provide a summary of your configuration and allow you to make changes before proceeding.
 
 ## Node Types
@@ -72,7 +72,11 @@ Validators are responsible for securing the network by participating in consensu
 
 ### Miner
 
-Miners on the Nesa network perform computationally heavy tasks like running AI model inference. Miners can be either Distributed Miners, which collaborate with others in a swarm to process tasks, or Non-Distributed Miners, which handle tasks independently. Miners contribute to the network's operation and earn rewards for their participation.
+Miners on the Nesa network perform computationally heavy tasks like running AI model inference. Miners contribute to the network's operation and earn rewards for their participation. The specific configuration of miners (distributed or non-distributed) is handled internally by the network.
+
+## Node Identification and Security
+
+Each node is assigned a unique node ID upon creation. This ID, along with a nonce and timestamp, is used to sign messages sent from the node to the network. This signing process ensures the authenticity of each node's communications without requiring the storage of private keys on our servers. The private key remains securely on the miner's machine and is used only for local signing operations.
 
 ## Advanced Setup
 
