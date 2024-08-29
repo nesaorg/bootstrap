@@ -32,17 +32,13 @@ Backspace 7
 Type "homer"
 Sleep 1.5s
 Enter
-Backspace 16
-Type "simpsons.net"
-Sleep 1s
-Enter
 Sleep 1s
 Backspace 26
 Type "chunkylover53@aol.com"
 Sleep 1s
 Enter
 Sleep 1s
-Type@0s "02232faebd602379e734370520fd3102b0288335cbd17c2ddc60ca5ff038bd0398"
+Type@0s "nesa1j6y248qnuawdnd7dtc3hg47jlzfj3jzwqv8rkq"
 Sleep 2s
 Enter
 Sleep 500ms
