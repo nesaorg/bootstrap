@@ -554,7 +554,7 @@ update_config_var() {
 
     if grep -q "^$var=" "$file"; then
         # Use a temporary file to handle sed differences
-        sed "s|^$var=.*|$var=$value|" "$file" > "$temp_file" && mv "$temp_file" "$file"
+        sed "s|^$var=.*|$var=\"$value\"|" "$file" > "$temp_file" && mv "$temp_file" "$file"
     else
         echo "$var=\"$value\"" >> "$file"
     fi
