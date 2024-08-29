@@ -930,7 +930,7 @@ else
 
         prompt_for_node_pk=0
 
-     if [ -n "$NODE_PRIV_KEY" ]; then
+        if [ -n "$NODE_PRIV_KEY" ]; then
             if ! gum confirm "Do you want to use the existing private key? "; then
                 prompt_for_node_pk=1
             fi
