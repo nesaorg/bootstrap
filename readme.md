@@ -60,7 +60,7 @@ bash <(curl -s https://raw.githubusercontent.com/nesaorg/bootstrap/master/bootst
 
 1. **Choose a Moniker**: Provide a unique name for your node.
 2. **Select Node Type**: Decide whether your node will act as a Validator or Miner. See below for details on each type.
-3. **Provide Wallet Private Key**: Enter your wallet private key for validator staking, miner registration, and to receive rewards.
+3. **Provide Wallet Private Key**: Enter your wallet private key for  miner registration and to receive rewards.
 4. **Enter Referral Code** (optional): If applicable, provide the referral code.
 6. **Finalize Configuration**: Review and confirm the configuration before starting your node. The bootstrap script will provide a summary of your configuration and allow you to make changes before proceeding.
 
