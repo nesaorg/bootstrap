@@ -73,6 +73,8 @@ config_env_file="$env_dir/.env"
 init_pwd=$PWD # so they can get back to where they started!
 status="booting" # lol not really doing anything with this currently
 ORC_PORT=31333
+
+MONIKER=${MONIKER:-$(hostname -s)}
 #
 # basic helper functions
 #
@@ -751,7 +753,6 @@ load_from_env_file() {
     : ${MINER_TYPE:=$MINER_TYPE_NONE}
     : ${DISTRIBUTED_TYPE:=$DISTRIBUTED_TYPE_NONE}
     : ${NESA_NODE_TYPE:="community"}
-    : ${MONIKER:-$(hostname -s)}
 
     # TODO: revisit below
     : ${PRIV_KEY:=""}
