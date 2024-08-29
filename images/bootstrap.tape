@@ -19,18 +19,18 @@ Hide
 Type "bash <(curl -s https://raw.githubusercontent.com/nesaorg/bootstrap/master/bootstrap.sh)"
 Show
 Enter
-Sleep 4s
+Sleep 2s
 Up
-Sleep 500ms
-Down
-Sleep 500ms
-Up
-Sleep 250ms
-Enter
 Sleep 1s
+Down
+Sleep 1s
+Up
+Sleep 500ms
+Enter
+Sleep 2s
 Backspace 7
 Type "homer"
-Sleep 1s
+Sleep 1.5s
 Enter
 Backspace 16
 Type "simpsons.net"
@@ -42,26 +42,18 @@ Type "chunkylover53@aol.com"
 Sleep 1s
 Enter
 Sleep 1s
-Down
+Type@0s "02232faebd602379e734370520fd3102b0288335cbd17c2ddc60ca5ff038bd0398"
+Sleep 2s
+Enter
 Sleep 500ms
 Up
-Sleep 500ms
+Sleep 750ms
 Down
-Sleep 250ms
+Sleep 1s
 Enter
-Sleep 4s
-Type@0s "23123123433fe4af34f324f34f3234232e23e2e23e2e2e23e22e23e2e2311114"
+Sleep 2s
+Type@0s "02232faebd602379e734370520fd3102b0288335cbd17c2ddc60ca5ff038bd0398"
 Sleep 1.5s
-Enter
-Sleep 3s
-Up
-Sleep 500ms
-Down
-Sleep 250ms
-Enter
-Sleep 1s
-Type "Helsinki-NLP/opus-mt-en-zh"
-Sleep 1s
 Enter
 Sleep 1s
 Type@0s "hf_blahblahblahblahblahblahblahblahaa"
