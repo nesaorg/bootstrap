@@ -52,10 +52,12 @@ node_id_file="$HOME/.nesa/identity/node_id.id"
 miner_type_none=0
 miner_type_non_distributed=1
 miner_type_distributed=2
+miner_type_agnostic=3
 
 distributed_type_none=0
 distributed_type_new_swarm=1
 distributed_type_existing_swarm=2
+distributed_type_agnostic=3
 
 # this will never load from the env file, but if they know to override it via ENV vars then they can
 WORKING_DIRECTORY=${WORKING_DIRECTORY:-"$HOME/.nesa"}
@@ -946,90 +948,93 @@ else
         clear
         update_header
 
-        echo -e "Now, what type of miner will $(gum style --foreground "$main_color" "$MONIKER") be?"
-        distributed_string="Distributed Miner"
-        non_distributed_string="Non-Distributed Miner"
+        if [[ "$NESA_NODE_TYPE" == "nesa" ]]; then
 
-     
-        if [[ "$MINER_TYPE" == "$miner_type_distributed" ]]; then
-            default_miner_choice="$distributed_string"
-        else
-            default_miner_choice="$non_distributed_string"
-        fi
+            echo -e "Now, what type of miner will $(gum style --foreground "$main_color" "$MONIKER") be?"
+            distributed_string="Distributed Miner"
+            non_distributed_string="Non-Distributed Miner"
 
-
-        selected_miner_type=$(gum choose "$distributed_string" "$non_distributed_string" --selected "$default_miner_choice")
-
-
-        clear
-        update_header
-
-        if grep -q "$selected_miner_type" <<<"$distributed_string"; then
-            IS_DIST=True # TODO: update containers to rely on DISTRIBUTED_TYPE instead of IS_DIST
-            MINER_TYPE=$miner_type_distributed
-
-            
-            echo -e "Would you like to join an existing $(gum style --foreground "$main_color" "swarm") or start a new one?"
-            existing_swarm="Join existing swarm"
-            new_swarm="Start a new swarm"
-
-
-            if [[ "$DISTRIBUTED_TYPE" == "$distributed_type_new_swarm" ]]; then
-                default_swarm_choice="$new_swarm"
+        
+            if [[ "$MINER_TYPE" == "$miner_type_distributed" ]]; then
+                default_miner_choice="$distributed_string"
             else
-                default_swarm_choice="$existing_swarm"
+                default_miner_choice="$non_distributed_string"
             fi
 
 
-            selected_distributed_type=$(gum choose "$existing_swarm" "$new_swarm" --selected "$default_swarm_choice")
+            selected_miner_type=$(gum choose "$distributed_string" "$non_distributed_string" --selected "$default_miner_choice")
+
 
             clear
             update_header
 
-            if grep -q "$selected_distributed_type" <<<"$new_swarm"; then
-                DISTRIBUTED_TYPE=$distributed_type_new_swarm
+            if grep -q "$selected_miner_type" <<<"$distributed_string"; then
+                IS_DIST=True # TODO: update containers to rely on DISTRIBUTED_TYPE instead of IS_DIST
+                MINER_TYPE=$miner_type_distributed
+
+                
+                echo -e "Would you like to join an existing $(gum style --foreground "$main_color" "swarm") or start a new one?"
+                existing_swarm="Join existing swarm"
+                new_swarm="Start a new swarm"
+
+
+                if [[ "$DISTRIBUTED_TYPE" == "$distributed_type_new_swarm" ]]; then
+                    default_swarm_choice="$new_swarm"
+                else
+                    default_swarm_choice="$existing_swarm"
+                fi
+
+
+                selected_distributed_type=$(gum choose "$existing_swarm" "$new_swarm" --selected "$default_swarm_choice")
+
+                clear
+                update_header
+
+                if grep -q "$selected_distributed_type" <<<"$new_swarm"; then
+                    DISTRIBUTED_TYPE=$distributed_type_new_swarm
+                    MODEL_NAME=$(
+                        gum input --cursor.foreground "${main_color}" \
+                            --prompt.foreground "${main_color}" \
+                            --prompt "Which model would you like to run? " \
+                            --placeholder "$MODEL_NAME" \
+                            --width 80 \
+                            --value "$MODEL_NAME"
+                    )
+
+
+                else 
+                    DISTRIBUTED_TYPE=$distributed_type_existing_swarm
+                    swarms_map=$(get_swarms_map)
+                    model_names=$(get_model_names "$swarms_map")
+                    echo -e "Which existing $(gum style --foreground "$main_color" "swarm") would you like to join?"
+                    MODEL_NAME=$(echo "$model_names" | gum choose)
+
+                    initial_peer_id=$(get_node_id "$swarms_map" "$MODEL_NAME") 
+                    node_lookup_id=$(create_combined_node_id "$swarms_map" "$MODEL_NAME")
+                    initial_peer_ip=$(fetch_network_address "$node_lookup_id") 
+
+                    INITIAL_PEER="/ip4/$initial_peer_ip/tcp/31330/p2p/$initial_peer_id"                
+
+                fi
+
+            else
+                MINER_TYPE=$miner_type_non_distributed
+                DISTRIBUTED_TYPE=$distributed_type_none
+                IS_DIST=False # deprecrated: update containers to rely on DISTRIBUTED_TYPE instead of IS_DIST
                 MODEL_NAME=$(
                     gum input --cursor.foreground "${main_color}" \
                         --prompt.foreground "${main_color}" \
                         --prompt "Which model would you like to run? " \
-                        --placeholder "$MODEL_NAME" \
-                        --width 80 \
+                        --placeholder "nlptown/bert-base-multilingual-uncased-sentiment" \
+                        --width 120 \
                         --value "$MODEL_NAME"
                 )
-
-
-            else 
-                DISTRIBUTED_TYPE=$distributed_type_existing_swarm
-                swarms_map=$(get_swarms_map)
-                model_names=$(get_model_names "$swarms_map")
-                echo -e "Which existing $(gum style --foreground "$main_color" "swarm") would you like to join?"
-                MODEL_NAME=$(echo "$model_names" | gum choose)
-
-                initial_peer_id=$(get_node_id "$swarms_map" "$MODEL_NAME") 
-                node_lookup_id=$(create_combined_node_id "$swarms_map" "$MODEL_NAME")
-                initial_peer_ip=$(fetch_network_address "$node_lookup_id") 
-
-                INITIAL_PEER="/ip4/$initial_peer_ip/tcp/31330/p2p/$initial_peer_id"                
-
+                
+        
             fi
-
-        else
-            MINER_TYPE=$miner_type_non_distributed
-            DISTRIBUTED_TYPE=$distributed_type_none
-            IS_DIST=False # deprecrated: update containers to rely on DISTRIBUTED_TYPE instead of IS_DIST
-            MODEL_NAME=$(
-                gum input --cursor.foreground "${main_color}" \
-                    --prompt.foreground "${main_color}" \
-                    --prompt "Which model would you like to run? " \
-                    --placeholder "nlptown/bert-base-multilingual-uncased-sentiment" \
-                    --width 120 \
-                    --value "$MODEL_NAME"
-            )
-            
-    
+            clear
+            update_header
         fi
-        clear
-        update_header
     
         HUGGINGFACE_API_KEY=$(
             gum input --cursor.foreground "${main_color}" \
@@ -1041,12 +1046,11 @@ else
             --value "$HUGGINGFACE_API_KEY"
         )
     
-else
-    MINER_TYPE=$miner_type_none
-    DISTRIBUTED_TYPE=$distributed_type_none
-    IS_DIST=False
-fi
-
+    else
+        MINER_TYPE=$miner_type_agnostic
+        DISTRIBUTED_TYPE=$distributed_type_agnostic
+        IS_DIST=False
+    fi
 fi
 
 
