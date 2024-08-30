@@ -563,6 +563,11 @@ update_config_var() {
     [ -f "$temp_file" ] && rm "$temp_file"
 }
 
+strip_0x_prefix() {
+    local key="$1"
+    # Remove 0x prefix if present
+    echo "${key#0x}"
+}
 
 save_to_env_file() {
     # Config environment variables
@@ -856,11 +861,13 @@ else
         fi
         
         if [ "$prompt_for_node_pk" -eq 1 ]; then
-            NODE_PRIV_KEY=$(gum input --cursor.foreground "${main_color}" \
+            dirty_priv_key=$(gum input --cursor.foreground "${main_color}" \
                 --password \
                 --prompt.foreground "${main_color}" \
                 --prompt "Node's wallet private key: " \
                 --width 160)
+            
+            NODE_PRIV_KEY=$(strip_0x_prefix "$dirty_priv_key")
         fi
 
 
