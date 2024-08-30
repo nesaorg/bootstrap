@@ -1054,11 +1054,11 @@ else
             fi
             clear
             update_header    
-        else
-            MINER_TYPE=$miner_type_agnostic
-            DISTRIBUTED_TYPE=$distributed_type_agnostic
-            IS_DIST=False
         fi
+    else
+        MINER_TYPE=$miner_type_agnostic
+        DISTRIBUTED_TYPE=$distributed_type_agnostic
+        IS_DIST=False
     fi
 fi
 
