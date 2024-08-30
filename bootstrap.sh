@@ -595,6 +595,7 @@ save_to_env_file() {
     update_config_var "$orchestrator_env_file" "HUGGINGFACE_API_KEY" "$HUGGINGFACE_API_KEY"
     update_config_var "$orchestrator_env_file" "MONIKER" "$MONIKER"
     update_config_var "$orchestrator_env_file" "NESA_NODE_TYPE" "$NESA_NODE_TYPE"
+    update_config_var "$orchestrator_env_file" "NODE_PRIV_KEY" "$NODE_PRIV_KEY"
 
     # Base environment variables
     update_config_var "$base_env_file" "MODEL_NAME" "$MODEL_NAME"
