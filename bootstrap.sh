@@ -861,14 +861,14 @@ else
         fi
         
         if [ "$prompt_for_node_pk" -eq 1 ]; then
-            dirty_priv_key=$(gum input --cursor.foreground "${main_color}" \
+            NODE_PRIV_KEY=$(gum input --cursor.foreground "${main_color}" \
                 --password \
                 --prompt.foreground "${main_color}" \
                 --prompt "Node's wallet private key: " \
                 --width 160)
-            
-            NODE_PRIV_KEY=$(strip_0x_prefix "$dirty_priv_key")
         fi
+
+        NODE_PRIV_KEY=$(strip_0x_prefix "$NODE_PRIV_KEY")
 
 
     clear
