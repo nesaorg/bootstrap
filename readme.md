@@ -35,7 +35,7 @@ Before running the bootstrap script, ensure your system meets the following requ
 
 - **Operating System**: Ubuntu, Debian, CentOS, macOS, Windows (with WSL). Other Linux distributions may work but are not officially supported.
 - **Docker**: Required for running Nesa nodes ([installation guide](https://docs.docker.com/get-docker/))
-- **Nvidia Container Toolkit**: For systems with an NVIDIA GPU ([example installation script](https://github.com/nesaorg/bootstrap/blob/master/install_nvidia_container_toolkit.sh))
+- **Nvidia Container Toolkit**: For systems with an NVIDIA GPU ([example installation script](https://raw.githubusercontent.com/nesaorg/bootstrap/master/helpers/install_nvidia_container_toolkit.sh))
 - **Curl**: To download and run the bootstrap script ([installation guide](https://curl.se/docs/install.html))
 
 ### Configuration Preparation
