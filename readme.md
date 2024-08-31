@@ -101,17 +101,20 @@ For more detailed troubleshooting steps, please refer to our [Troubleshooting Gu
 For more detailed information on common questions and setup details, please visit our [FAQ](./FAQ.md) section.
 
 ### Table of Contents
-1. [Do I need to be whitelisted to run a miner node?](./FAQ.md#1-do-i-need-to-be-whitelisted-to-run-a-miner-node)
-2. [Why do I need to provide a private key when setting up a miner node?](./FAQ.md#2-why-do-i-need-to-provide-a-private-key-when-setting-up-a-miner-node)
-3. [How do I find my node's ID (formerly public_key/peer_id)?](./FAQ.md#3-how-do-i-find-my-nodes-id-formerly-public_keypeer_id)
-4. [I installed the validator, but I want to run a miner instead. What should I do?](./FAQ.md#4-i-installed-the-validator-but-i-want-to-run-a-miner-instead-what-should-i-do)
-5. [What’s the difference between a Distributed Miner and a Non-Distributed Miner?](./FAQ.md#5-whats-the-difference-between-a-distributed-miner-and-a-non-distributed-miner)
-6. [Can I run a miner node without a GPU?](./FAQ.md#6-can-i-run-a-miner-node-without-a-gpu)
-7. [How do I obtain a Hugging Face API key?](./FAQ.md#7-how-do-i-obtain-a-hugging-face-api-key)
-8. [How do I pick a model when setting up my miner?](./FAQ.md#8-how-do-i-pick-a-model-when-setting-up-my-miner)
-9. [What is the difference between a miner and a validator?](./FAQ.md#9-what-is-the-difference-between-a-miner-and-a-validator)
-10. [What is the difference between Wizardry and Advanced Wizardry in the bootstrap script?](./FAQ.md#10-what-is-the-difference-between-wizardry-and-advanced-wizardry-in-the-bootstrap-script)
-11. [Is there current Windows support for running a miner?](./FAQ.md#11-is-there-current-windows-support-for-running-a-miner)
+
+1. [Do I need to be whitelisted to run a miner node?](#1-do-i-need-to-be-whitelisted-to-run-a-miner-node)
+2. [Why do I need to provide a private key when setting up a miner node?](#2-why-do-i-need-to-provide-a-private-key-when-setting-up-a-miner-node)
+3. [How do I find my node's ID (formerly public\_key/peer\_id)?](#3-how-do-i-find-my-nodes-id-formerly-public_keypeer_id)
+4. [I installed the validator, but I want to run a miner instead. What should I do?](#4-i-installed-the-validator-but-i-want-to-run-a-miner-instead-what-should-i-do)
+5. [What’s the difference between a Distributed Miner and a Non-Distributed Miner?](#5-whats-the-difference-between-a-distributed-miner-and-a-non-distributed-miner)
+6. [Why don't I see options to choose between distributed and non-distributed mining?](#6-why-dont-i-see-options-to-choose-between-distributed-and-non-distributed-mining)
+7. [Can I run a miner node without a GPU?](#7-can-i-run-a-miner-node-without-a-gpu)
+8. [How do I obtain a Hugging Face API key?](#8-how-do-i-obtain-a-hugging-face-api-key)
+9. [Why don't I see the option to specify a model anymore?](#9-why-dont-i-see-the-option-to-specify-a-model-anymore)
+10. [What is the difference between a miner and a validator?](#10-what-is-the-difference-between-a-miner-and-a-validator)
+11. [What is the difference between Wizardry and Advanced Wizardry in the bootstrap script?](#11-what-is-the-difference-between-wizardry-and-advanced-wizardry-in-the-bootstrap-script)
+12. [Is there current Windows support for running a miner?](#12-is-there-current-windows-support-for-running-a-miner)
+13. [How does the referral system work?](#13-how-does-the-referral-system-work)
 
 ## Community and Support
 
