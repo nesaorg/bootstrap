@@ -1066,6 +1066,7 @@ else
     else
         MINER_TYPE=$miner_type_agnostic
         DISTRIBUTED_TYPE=$distributed_type_agnostic
+        IS_MINER="yes"
         IS_DIST=False
     fi
 fi
