@@ -622,6 +622,7 @@ save_to_env_file() {
 display_config() {
     local exclude_keys=("HUGGINGFACE_API_KEY" "NODE_PRIV_KEY")
     local config_content
+    local priv_key_display
 
     config_content=$(cat "$config_env_file" "$agent_env_file" "$bsns_c_env_file" "$bsns_s_env_file" "$orchestrator_env_file" "$base_env_file" | sort | uniq)
      
@@ -637,6 +638,14 @@ display_config() {
         config_content="$config_content"$'\n'"NODE_ID=$NODE_ID"
     fi
 
+    if [[ -n "$NODE_PRIV_KEY" ]]; then
+        local length=${#NODE_PRIV_KEY}
+        priv_key_display="$(printf '%*s' "$((length - 4))" '' | tr ' ' '*')${NODE_PRIV_KEY: -4}"
+        config_content="$config_content"$'\n'"PRIVATE_KEY=$priv_key_display"
+    fi
+
+    
+    config_content=$(echo "$config_content" | sed 's/"//g')
     config_content="\`\`\`Makefile\n$config_content\n\`\`\`"
 
     echo -e "$config_content" | gum format --type markdown --theme dracula 
