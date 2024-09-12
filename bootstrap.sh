@@ -95,19 +95,29 @@ print_test() {
 
 update_header() {
     local dashboard_url
+    local op_dashboard_url
+    local public_key
 
     if [[ "$NODE_ID" == "pending..." ]]; then
         dashboard_url="https://node.nesa.ai"
     else
         dashboard_url="https://node.nesa.ai/nodes/$NODE_ID"
+    fi 
+
+    if [[ -n "$NODE_PRIV_KEY" ]]; then
+        public_key=$(generate_public_key "$NODE_PRIV_KEY")
+        op_dashboard_url="https://node.nesa.ai/$public_key/list"
+    else
+        public_key="pending..."
+        op_dashboard_url="pending..."
     fi
-    
+
     info=$(gum style "[1;38;5;${main_color}m  ${MONIKER}[0m.${domain}
   ---------------- 
   [1;38;5;${main_color}mnode id:       [0m${NODE_ID}
-  [1;38;5;${main_color}mdashboard:     [0;38;5;${link_color}m$dashboard_url[0m
-  [1;38;5;${main_color}mvalidator:     [0m${IS_VALIDATOR}
-  [1;38;5;${main_color}mminer:         [0m${IS_MINER}
+  [1;38;5;${main_color}mpublic key:    [0m${public_key}
+  [1;38;5;${main_color}mdashboard:     [0;38;5;${link_color}m${dashboard_url}[0m
+  [1;38;5;${main_color}mop dash:       [0;38;5;${link_color}m${op_dashboard_url}[0m
   [1;38;5;${main_color}mstatus:        [0m${status}") 
     header=$(gum join --horizontal --align top "${logo}" '  ' "${info}")
 
@@ -543,6 +553,25 @@ fetch_network_address() {
     echo "$network_address"
 }
 
+generate_public_key() {
+    local private_key="$1"
+    python3 -c "
+import ecdsa
+
+def strip_0x_prefix(key_hex):
+    return key_hex[2:] if key_hex.startswith('0x') else key_hex
+
+def private_key_to_public_key(private_key_hex):
+    private_key_hex = strip_0x_prefix(private_key_hex)
+    private_key_bytes = bytes.fromhex(private_key_hex)
+    sk = ecdsa.SigningKey.from_string(private_key_bytes, curve=ecdsa.SECP256k1)
+    vk = sk.get_verifying_key()
+    public_key_compressed = b'\x02' + vk.to_string()[:32] if vk.to_string()[-1] % 2 == 0 else b'\x03' + vk.to_string()[:32]
+    return public_key_compressed.hex()
+
+print(private_key_to_public_key('$private_key'))
+"
+}
 
 update_config_var() {
     local file=$1
@@ -639,9 +668,10 @@ display_config() {
     fi
 
     if [[ -n "$NODE_PRIV_KEY" ]]; then
+        local pub_key=$(generate_public_key "$NODE_PRIV_KEY")
         local length=${#NODE_PRIV_KEY}
         priv_key_display="$(printf '%*s' "$((length - 4))" '' | tr ' ' '*')${NODE_PRIV_KEY: -4}"
-        config_content="$config_content"$'\n'"PRIVATE_KEY=$priv_key_display"
+        config_content="$config_content"$'\n'"PRIVATE_KEY=$priv_key_display\nPUBLIC_KEY=$pub_key"
     fi
 
     
