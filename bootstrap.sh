@@ -246,6 +246,19 @@ check_docker_installed() {
     fi
 }
 
+check_python_and_ecdsa() {
+    if ! command -v python3 &>/dev/null; then
+        echo "Python 3 is not installed. Please install Python 3 and try again."
+        exit 1
+    fi
+
+    if ! python3 -c "import ecdsa" &>/dev/null; then
+        echo "The ecdsa library is not installed. Installing now..."
+        pip3 install ecdsa
+    fi
+}
+
+
 # TODO: handle the need for sudo here -.-
 # check_nvidia_installed() {
 #     if ! command_exists nvidia-smi; then
@@ -814,6 +827,7 @@ PUBLIC_IP=$(curl -s4 ifconfig.me)
 check_gum_installed
 check_docker_installed
 check_jq_installed
+check_python_and_ecdsa
 # check_nvidia_installed
 detect_hardware_capabilities
 clear
