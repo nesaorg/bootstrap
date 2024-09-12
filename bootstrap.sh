@@ -663,9 +663,10 @@ compose_up() {
         exit 1
     }
 
-    if [[ -n "$nvidia_present" ]]; then
+    if [[ -n "$nvidia_present" ]] && [[ "${NOGPU,,}" != "true" ]] && [[ "${NOGPU,,}" != "1" ]]; then
         compose_ext=".nvidia.yml"
     fi
+
 
     if [[ "$NESA_NODE_TYPE" == "community" ]]; then
         compose_files="compose.community${compose_ext}"
