@@ -8,7 +8,7 @@
 #   ▄▄▄   ███ █████   ███████ ███████ 
 #   ███   ███ ██           ██ ██   ██
 #   ███   ███ ███████ ███████ ██   ██ 
-#   install_nvidia_container_toolkit.sh    
+#   install_docker_ubuntu.sh    
 #
 #   Helper script to install NVIDIA Container Toolkit.
 
