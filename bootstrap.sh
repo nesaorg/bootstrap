@@ -1,14 +1,14 @@
 #!/bin/bash
 #
 #
-#    ▄▄▄▄▄▄  
-#   ███▀▀▀██▄      nesaorg/bootstrap 
+#    ▄▄▄▄▄▄
+#   ███▀▀▀██▄      nesaorg/bootstrap
 #   ███   ███ ███████ ███████  █████
 #   ███   ███ ██      ██      ██   ██
-#   ▄▄▄   ███ █████   ███████ ███████ 
+#   ▄▄▄   ███ █████   ███████ ███████
 #   ███   ███ ██           ██ ██   ██
-#   ███   ███ ███████ ███████ ██   ██ 
-#   bootstrap.sh      fielding@nesa.ai 
+#   ███   ███ ███████ ███████ ██   ██
+#   bootstrap.sh      fielding@nesa.ai
 #
 #
 #   noteworthy conventions: variables that are exported to the config file or the container environment files are in all caps
@@ -19,6 +19,16 @@
 
 trap 'trap " " SIGINT SIGTERM SIGHUP; kill 0; wait; sigterm_handler' SIGINT SIGTERM SIGHUP
 
+# ---- global bootstrap logging (captures ALL stdout/err while keeping the screen interactive) ----
+DEFAULT_WORKDIR="${HOME}/.nesa"
+LOG_DIR="${DEFAULT_WORKDIR}/logs"
+mkdir -p "${LOG_DIR}"
+
+# Mirror STDOUT and STDERR to file; only the copy to file is timestamped.
+# This preserves gum's interactive UI on the terminal.
+exec > >(tee >(awk '{ printf "[%s] %s\n", strftime("%Y-%m-%dT%H:%M:%SZ"), $0; fflush() }' >> "${LOG_DIR}/bootstrap.log"))
+exec 2> >(tee >(awk '{ printf "[%s] %s\n", strftime("%Y-%m-%dT%H:%M:%SZ"), $0; fflush() }' >> "${LOG_DIR}/bootstrap.log") >&2)
+# -----------------------------------------------------------------------------------------------
 
 sigterm_handler() {
     printf "\n Aborting node setup. Cleaning up...\n"
@@ -33,12 +43,12 @@ terminal_width=${terminal_size#* }
 prompt_height=${PROMPT_HEIGHT:-1}
 main_color=43
 link_color=69
-logo=$(gum style '   ▄▄▄▄▄▄  
-  ███▀▀▀██▄   
-  ███   ███ 
-  ███   ███  
-  ▄▄▄   ███ 
-  ███   ███ 
+logo=$(gum style '   ▄▄▄▄▄▄
+  ███▀▀▀██▄
+  ███   ███
+  ███   ███
+  ▄▄▄   ███
+  ███   ███
   ███   ███')
 
 CHAIN_ID="nesa-testnet-3"
@@ -63,11 +73,7 @@ distributed_type_agnostic=3
 WORKING_DIRECTORY=${WORKING_DIRECTORY:-"$HOME/.nesa"}
 env_dir="$WORKING_DIRECTORY/env"
 
-agent_env_file="$env_dir/agent.env"
-bsns_s_env_file="$env_dir/bsns-s.env"
-bsns_c_env_file="$env_dir/bsns-c.env"
 orchestrator_env_file="$env_dir/orchestrator.env"
-fluentbit_env_file="$env_dir/fluentbit.env"
 base_env_file="$env_dir/base.env"
 config_env_file="$env_dir/.env"
 init_pwd=$PWD # so they can get back to where they started!
@@ -102,7 +108,7 @@ update_header() {
         dashboard_url="https://node.nesa.ai"
     else
         dashboard_url="https://node.nesa.ai/nodes/$NODE_ID"
-    fi 
+    fi
 
     if [[ -n "$NODE_PRIV_KEY" ]]; then
         public_key=$(generate_public_key "$NODE_PRIV_KEY")
@@ -113,12 +119,12 @@ update_header() {
     fi
 
     info=$(gum style "[1;38;5;${main_color}m  ${MONIKER}[0m.${domain}
-  ---------------- 
+  ----------------
   [1;38;5;${main_color}mnode id:       [0m${NODE_ID}
   [1;38;5;${main_color}mpublic key:    [0m${public_key}
   [1;38;5;${main_color}mdashboard:     [0;38;5;${link_color}m${dashboard_url}[0m
   [1;38;5;${main_color}mop dash:       [0;38;5;${link_color}m${op_dashboard_url}[0m
-  [1;38;5;${main_color}mstatus:        [0m${status}") 
+  [1;38;5;${main_color}mstatus:        [0m${status}")
     header=$(gum join --horizontal --align top "${logo}" '  ' "${info}")
 
     echo -e "\n"
@@ -320,12 +326,12 @@ get_linux_info() {
     cores=$(lscpu | grep '^CPU(s):' | awk '{print $2}')
     ram=$(free -h | grep Mem | awk '{print $2}')
     disk_avail=$(df -h --total | grep total | awk '{print $4}')
-    
+
     gpu=$(lspci | grep -i -e '3D controller' -e 'VGA compatible controller' | grep -i -e nvidia -e amd | awk -F: '{print $3}' | sed 's/^ *//')
     gpu_count=$(lspci | grep -i -e '3D controller' -e 'VGA compatible controller' | grep -i -e nvidia -e amd | wc -l | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-    
+
     gpu_memory=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | awk '{total += $1} END {print total " MB"}')
-    
+
     if [ -z "$gpu_memory" ]; then
         gpu_memory=$(lshw -C display 2>/dev/null | grep -i size | awk '{print $2 " " $3}' | head -n 1)
     fi
@@ -350,7 +356,7 @@ get_macos_info() {
     cores=$(sysctl -n hw.ncpu)
     ram=$(sysctl -n hw.memsize | awk '{print $1/1024/1024/1024 " GB"}')
     disk_avail=$(df -h / | grep / | awk '{print $4}')
-    
+
     gpu=$(system_profiler SPDisplaysDataType | grep 'Chipset Model' | awk -F: '{print $2}' | sed 's/^ *//')
     gpu_count=$(system_profiler SPDisplaysDataType | grep 'Chipset Model' | wc -l | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
     gpu_memory=$(system_profiler SPDisplaysDataType | grep 'VRAM' | awk -F: '{total += $2} END {print total " MB"}' | sed 's/^ *//')
@@ -375,7 +381,7 @@ get_windows_info() {
     cores=$(wmic cpu get NumberOfCores /value | awk -F= '{print $2}')
     ram=$(wmic computersystem get totalphysicalmemory /value | awk -F= '{print $2/1024/1024/1024 " GB"}')
     disk_avail=$(wmic logicaldisk get size,freespace,caption | awk '{if ($1 == "C:") print $3/1024/1024/1024 " GB"}')
-    
+
     gpu=$(wmic path win32_videocontroller get name /value | awk -F= '{print $2}')
     gpu_count=$(wmic path win32_videocontroller get name /value | grep -c "Name" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
     gpu_memory=$(wmic path win32_videocontroller get AdapterRAM /value | awk -F= '{total += $2} END {print total/1024/1024 " MB"}')
@@ -465,7 +471,6 @@ setup_work_dir() {
 }
 
 setup_docker_repository() {
-        # Clone or pull the latest changes if the repo already exists
     if [ ! -d "docker" ]; then
         gum spin -s line --title "Cloning the nesaorg/docker repository..." -- git clone https://github.com/nesaorg/docker.git
     else
@@ -487,13 +492,13 @@ get_swarms_map() {
     local url="https://lcd.test.nesa.ai/nesachain/dht/get_orchestrators"
     local json_data
     local excluded_node_ids
-    local exclude_node_ids_json 
+    local exclude_node_ids_json
     local map=()
 
     excluded_node_ids=(
-    "QmbtSFavybyKNkP2MAhVftA4S7tAW5HXvbKGiX9hHx9XqF|mistralai|Mixtral-8x7B-Instruct-v0.1" 
+    "QmbtSFavybyKNkP2MAhVftA4S7tAW5HXvbKGiX9hHx9XqF|mistralai|Mixtral-8x7B-Instruct-v0.1"
     "QmR58ndfebR3LXNxT5qx3FgXMkb4AptjpDM83r1CXfAhAw|mistralai|Mixtral-8x7B-Instruct-v0.1"
-    "Qmc6GZVS41EzzU5j13cy1pL3HjhwJfaf1N71cjp2zt18HX|Orenguteng|Llama-3-8B-Lexi-Uncensored" 
+    "Qmc6GZVS41EzzU5j13cy1pL3HjhwJfaf1N71cjp2zt18HX|Orenguteng|Llama-3-8B-Lexi-Uncensored"
     "QmR4Gi37D1cPnihhkvRG9kRGtBtXYxwAYo92x6y1FYxmij|bigscience|bloom-560m"
     "QmeCvBP1N3BqDiQc7hGxNFgrtguVHncqGKChJJeMZtsM8C|randommodel"
     "QmUxwnuEKAEY9CnB4tEPKvmwK6h6pmuSN3V28vQ9A3s8qQ|randommodel22"
@@ -503,7 +508,7 @@ get_swarms_map() {
 
     json_data=$(curl -s "$url")
 
-    
+
     map=$(echo "$json_data" | jq -r --argjson exclude_node_ids "$exclude_node_ids_json" '
         .orchestrators |
         map(select(.node_id | (contains("/") | not))) |
@@ -619,24 +624,6 @@ save_to_env_file() {
     update_config_var "$config_env_file" "MINER_TYPE" "$MINER_TYPE"
     update_config_var "$config_env_file" "DISTRIBUTED_TYPE" "$DISTRIBUTED_TYPE"
 
-    # Agent environment variables
-    # update_config_var "$agent_env_file" "VIRTUAL_HOST" "$NODE_HOSTNAME"
-    # update_config_var "$agent_env_file" "LETSENCRYPT_HOST" "$NODE_HOSTNAME"
-    # update_config_var "$agent_env_file" "LETSENCRYPT_EMAIL" "$OP_EMAIL"
-    # update_config_var "$agent_env_file" "CHAIN_ID" "$CHAIN_ID"
-    # update_config_var "$agent_env_file" "NODE_HOSTNAME" "$NODE_HOSTNAME"
-    # update_config_var "$agent_env_file" "NODE_PRIV_KEY" "$NODE_PRIV_KEY"
-
-    # bsns-s environment variables
-    # update_config_var "$bsns_s_env_file" "INITIAL_PEER" "$INITIAL_PEER"
-    # update_config_var "$bsns_s_env_file" "NODE_PRIV_KEY" "$NODE_PRIV_KEY"
-    # update_config_var "$bsns_s_env_file" "HUGGINGFACE_API_KEY" "$HUGGINGFACE_API_KEY"
-
-
-    # # bsns-c environment variables
-    # update_config_var "$bsns_c_env_file" "PUBLIC_IP" "$PUBLIC_IP"
-    # update_config_var "$bsns_c_env_file" "NODE_PRIV_KEY" "$NODE_PRIV_KEY"
-
     # Orchestrator environment variables
     update_config_var "$orchestrator_env_file" "IS_DIST" "$IS_DIST"
     update_config_var "$orchestrator_env_file" "HUGGINGFACE_API_KEY" "$HUGGINGFACE_API_KEY"
@@ -666,7 +653,7 @@ display_config() {
     local config_content
     local priv_key_display
 
-    config_content=$(cat "$config_env_file" "$agent_env_file" "$bsns_c_env_file" "$bsns_s_env_file" "$orchestrator_env_file" "$base_env_file" | sort | uniq)
+    config_content=$(cat "$config_env_file" "$orchestrator_env_file" "$base_env_file" | sort | uniq)
 
 
     for key in "${exclude_keys[@]}"; do
@@ -696,72 +683,22 @@ display_config() {
 }
 
 
-# compose_up() {
-#     local compose_files="compose.yml"
-#     local nvidia_present=$(command -v nvidia-smi)
-#     local compose_ext=".yml"
-
-#     cd "$WORKING_DIRECTORY/docker" || {
-#         echo "Error: Docker directory does not exist."
-#         exit 1
-#     }
-
-#     if [[ -n "$nvidia_present" ]] && [[ "${NOGPU,,}" != "true" ]] && [[ "${NOGPU,,}" != "1" ]]; then
-#         compose_ext=".nvidia.yml"
-#     fi
-
-
-#     if [[ "$NESA_NODE_TYPE" == "community" ]]; then
-#         compose_files="compose.community${compose_ext}"
-#     else
-#         if [[ "$IS_CHAIN" == "yes" ]] || [[ "$IS_VALIDATOR" == "yes" ]]; then
-#             compose_files+=" -f compose.chain.yml"
-#         fi
-
-#         if [[ "$IS_MINER" == "yes" ]]; then
-#             if [[ "$MINER_TYPE" == "$miner_type_non_distributed" ]]; then
-#                 compose_files+=" -f compose.non-dist${compose_ext}"
-#             elif [[ "$MINER_TYPE" == "$miner_type_distributed" ]]; then
-#                 if [[ "$DISTRIBUTED_TYPE" == "$distributed_type_new_swarm" ]]; then
-#                     compose_files+=" -f compose.bsns-c${compose_ext}"
-#                 elif [[ "$DISTRIBUTED_TYPE" == "$distributed_type_existing_swarm" ]]; then
-#                     compose_files+=" -f compose.bsns-s${compose_ext}"
-#                 fi
-#             fi
-#         fi
-#     fi
-
-#     docker compose -f $compose_files up --pull always -d --wait
-
-#     if [[ $? -ne 0 ]]; then
-#         echo "Error: Docker Compose failed to start."
-#         exit 1
-#     else
-#         echo "Docker Compose started successfully."
-#     fi
-# }
 
 compose_up() {
-    local nvidia_present=$(command -v nvidia-smi)
-    local compose_files="compose.yml"
+  local compose_files="compose.yml"
+  cd "$WORKING_DIRECTORY/docker" || { echo "Error: Docker directory does not exist."; exit 1; }
 
-    cd "$WORKING_DIRECTORY/docker" || {
-        echo "Error: Docker directory does not exist."
-        exit 1
-    }
+  if command -v nvidia-smi >/dev/null && [[ "${NOGPU,,}" != "true" && "${NOGPU,,}" != "1" ]]; then
+    compose_files="compose.nvidia.yml"
+  fi
 
-    if [[ -n "$nvidia_present" ]] && [[ "${NOGPU,,}" != "true" ]] && [[ "${NOGPU,,}" != "1" ]]; then
-        compose_files="compose.nvidia.yml"
-    fi
+  local files="-f ${compose_files}"
+  if [ -f "compose.logs.yml" ]; then
+    files="${files} -f compose.logs.yml"
+  fi
 
-    docker compose -f $compose_files up --pull always -d --wait
-
-    if [[ $? -ne 0 ]]; then
-        echo "Error: Docker Compose failed to start."
-        exit 1
-    else
-        echo "Docker Compose started successfully."
-    fi
+  docker compose ${files} up --pull always -d --wait || { echo "Error: Docker Compose failed to start."; exit 1; }
+  echo "Docker Compose started successfully."
 }
 
 load_node_id() {
@@ -786,34 +723,10 @@ load_from_env_file() {
         touch "$config_env_file"
     fi
 
-    if [ -f "$agent_env_file" ]; then
-        source "$agent_env_file"
-    elif [ "$1" != "advanced" ]; then
-        touch "$agent_env_file"
-    fi
-
-    if [ -f "$bsns_s_env_file" ]; then
-        source "$bsns_s_env_file"
-    elif [ "$1" != "advanced" ]; then
-        touch "$bsns_s_env_file"
-    fi
-
-    if [ -f "$bsns_c_env_file" ]; then
-        source "$bsns_c_env_file"
-    elif [ "$1" != "advanced" ]; then
-        touch "$bsns_c_env_file"
-    fi
-
     if [ -f "$orchestrator_env_file" ]; then
         source "$orchestrator_env_file"
     elif [ "$1" != "advanced" ]; then
         touch "$orchestrator_env_file"
-    fi
-
-    if [ -f "$fluentbit_env_file" ]; then
-        source "$fluentbit_env_file"
-    elif [ "$1" != "advanced" ]; then
-        touch "$fluentbit_env_file"
     fi
 
     if [ -f "$base_env_file" ]; then
@@ -839,7 +752,7 @@ load_from_env_file() {
 
 load_from_env_file "wizard"
 load_node_id
-# don't use cached/saved values for these 
+# don't use cached/saved values for these
 PUBLIC_IP=$(curl -s4 ifconfig.me)
 
 #
@@ -853,7 +766,7 @@ check_jq_installed
 check_python_and_ecdsa
 # check_nvidia_installed
 detect_hardware_capabilities
-clear
+# clear
 update_header
 
 
@@ -863,7 +776,7 @@ advanced_mode="Advanced Wizardy"
 
 mode=$(gum choose "$wizard_mode" "$advanced_mode")
 
-clear
+# clear
 update_header
 
 gum spin -s line --title "Setting up working directory and cloning node repository..." -- setup_work_dir
@@ -883,31 +796,9 @@ else
 
     MONIKER=$(echo "$MONIKER" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 
-    clear
+    # clear
     update_header
 
-    # if [[ "$NESA_NODE_TYPE" == "nesa" ]]; then
-    #     NODE_HOSTNAME=${NODE_HOSTNAME:-"$MONIKER.yourdomain.tld"}
-    #     NODE_HOSTNAME=$(gum input --cursor.foreground "${main_color}" \
-    #         --prompt.foreground "${main_color}" \
-    #         --prompt "What will $(gum style --foreground "main_color" "$MONIKER")'s hostname be? " \
-    #         --placeholder "$NODE_HOSTNAME" \
-    #         --width 80 \
-    #         --value "$NODE_HOSTNAME")
-
-    #     clear
-    #     update_header
-    # else
-    #     NODE_HOSTNAME=${NODE_HOSTNAME:-"$MONIKER"}
-    # fi
-
-    # OP_EMAIL=${OP_EMAIL:-"admin@$NODE_HOSTNAME"}
-    # OP_EMAIL=$(gum input --cursor.foreground "${main_color}" \
-    #     --prompt.foreground "${main_color}" \
-    #     --prompt "What is the email of the node operator? " \
-    #     --placeholder "$OP_EMAIL" \
-    #     --width 80 \
-    #     --value "$OP_EMAIL")
 
 
     REF_CODE=$(gum input --cursor.foreground "${main_color}" \
@@ -936,10 +827,10 @@ else
         else
             prompt_for_node_pk=1
         fi
-        
+
         if [ "$prompt_for_node_pk" -eq 1 ]; then
             NODE_PRIV_KEY=$(gum input --cursor.foreground "${main_color}" \
-                --password \
+               --password \
                 --prompt.foreground "${main_color}" \
                 --prompt "Node's wallet private key: " \
                 --width 160)
@@ -948,205 +839,10 @@ else
         NODE_PRIV_KEY=$(strip_0x_prefix "$NODE_PRIV_KEY")
 
 
-    clear
+    # clear
     update_header
 
 
-
-
-#     if [[ "$NESA_NODE_TYPE" == "nesa" ]]; then
-
-#         echo -e "Now, what type(s) of node is $(gum style --foreground "$main_color" "$MONIKER")? (use space to select which type(s)"
-
-#         chain_string="Base"
-#         validator_string="Validator"
-#         miner_string="Miner"
-
-#         previous_node_type="$chain_string"
-
-#         if [[ "$IS_CHAIN" == "yes" ]]; then
-#             previous_node_type="$chain_string"
-#         fi
-
-#         if [[ "$IS_VALIDATOR" == "yes" ]]; then
-#             if [[ -n "$previous_node_type" ]]; then
-#                 previous_node_type+=","
-#             fi
-#             previous_node_type+="$validator_string"
-#         fi
-
-#         if [[ "$IS_MINER" == "yes" ]]; then
-#             if [[ -n "$previous_node_type" ]]; then
-#                 previous_node_type+=","
-#             fi
-#             previous_node_type+="$miner_string"
-#         fi
-
-#         node_type=$(gum choose "$validator_string" "$miner_string" --selected "$previous_node_type")
-
-#         grep -q "$chain_string" <<<"$node_type" && IS_CHAIN="yes" || IS_CHAIN="no"
-#         grep -q "$validator_string" <<<"$node_type" && IS_VALIDATOR="yes" || IS_VALIDATOR="no"
-#         grep -q "$miner_string" <<<"$node_type" && IS_MINER="yes" || IS_MINER="no"
-
-#         clear
-#         update_header
-
-#         if grep -q "$validator_string" <<<"$node_type"; then
-
-#             echo -e "We are only bootstrapping miner nodes at the moment."
-#             echo -e "Please apply to run a $(gum style --foreground "$main_color" "validator") node here: https://forms.gle/3fQQHVJbHqTPpmy58"
-#             exit 1
-
-#             # download_import_key_expect
-
-#             # if [ ! -n "$PRIV_KEY" ]; then
-#             #     PRIV_KEY=$(gum input --cursor.foreground "${main_color}" \
-#             #         --password \
-#             #         --prompt.foreground "${main_color}" \
-#             #         --prompt "Validator's private key: " \
-#             #         --width 80)
-
-#             #     clear
-#             #     update_header
-#             #     PASSWORD=$(gum input --cursor.foreground "${main_color}" \
-#             #         --password \
-#             #         --prompt.foreground "${main_color}" \
-#             #         --prompt "Password for the private key: " \
-#             #         --width 80)
-
-#             #     docker pull ghcr.io/nesaorg/nesachain/nesachain:test
-#             #     docker volume create nesachain-data
-
-#             #     docker run --rm -v nesachain-data:/app/.nesachain -e MONIKER="$MONIKER" -e CHAIN_ID="$CHAIN_ID" -p 26656:26656 -p 26657:26657 -p 1317:1317 -p 9090:9090 -p 2345:2345 $chain_container
-
-#             #     "$WORKING_DIRECTORY/import_key.expect" "$MONIKER" "$PRIV_KEY" "$chain_container" "$PASSWORD"
-
-#             # fi
-
-#             # docker run --rm --entrypoint sh -v nesachain-data:/app/.nesachain -p 26656:26656 -p 26657:26657 -p 1317:1317 -p 9090:9090 -p 2345:2345 $chain_container -c '
-#             #     VAL_PUB_KEY=$(nesad tendermint show-validator | jq -r ".key") && \
-#             #     echo "VAL_PUB_KEY: $VAL_PUB_KEY" && \
-#             #     jq -n \
-#             #         --arg pubkey "$VAL_PUB_KEY" \
-#             #         --arg amount "100000000000unes" \
-#             #         --arg moniker "'"$MONIKER"'" \
-#             #         --arg chain_id "'"$CHAIN_ID"'" \
-#             #         --arg commission_rate "0.10" \
-#             #         --arg commission_max_rate "0.20" \
-#             #         --arg commission_max_change_rate "0.01" \
-#             #         --arg min_self_delegation "1" \
-#             #         '"'"'{
-#             #             pubkey: {"@type":"/cosmos.crypto.ed25519.PubKey", "key": $pubkey},
-#             #             amount: $amount,
-#             #             moniker: $moniker,
-#             #             "commission-rate": $commission_rate,
-#             #             "commission-max-rate": $commission_max_rate,
-#             #             "commission-max-change-rate": $commission_max_change_rate,
-#             #             "min-self-delegation": $min_self_delegation
-#             #         }'"'"' > /app/.nesachain/validator.json && \
-#             #     cat /app/.nesachain/validator.json
-#             # '
-
-#             # docker run --rm --entrypoint nesad -v nesachain-data:/app/.nesachain $chain_container tx staking create-validator /app/.nesachain/validator.json --from "$MONIKER" --chain-id "$CHAIN_ID" --gas auto --gas-adjustment 1.5 --node https://rpc.test.nesa.ai
-
-#         fi
-
-#         if grep -q "$miner_string" <<<"$node_type"; then
-#             clear
-#             update_header
-
-#             echo -e "Now, what type of miner will $(gum style --foreground "$main_color" "$MONIKER") be?"
-#             distributed_string="Distributed Miner"
-#             non_distributed_string="Non-Distributed Miner"
-
-
-#             if [[ "$MINER_TYPE" == "$miner_type_distributed" ]]; then
-#                 default_miner_choice="$distributed_string"
-#             else
-#                 default_miner_choice="$non_distributed_string"
-#             fi
-
-
-#             selected_miner_type=$(gum choose "$distributed_string" "$non_distributed_string" --selected "$default_miner_choice")
-
-
-#             clear
-#             update_header
-
-#             if grep -q "$selected_miner_type" <<<"$distributed_string"; then
-#                 IS_DIST=True # TODO: update containers to rely on DISTRIBUTED_TYPE instead of IS_DIST
-#                 MINER_TYPE=$miner_type_distributed
-
-
-#                 echo -e "Would you like to join an existing $(gum style --foreground "$main_color" "swarm") or start a new one?"
-#                 existing_swarm="Join existing swarm"
-#                 new_swarm="Start a new swarm"
-
-
-#                 if [[ "$DISTRIBUTED_TYPE" == "$distributed_type_new_swarm" ]]; then
-#                     default_swarm_choice="$new_swarm"
-#                 else
-#                     default_swarm_choice="$existing_swarm"
-#                 fi
-
-
-#                 selected_distributed_type=$(gum choose "$existing_swarm" "$new_swarm" --selected "$default_swarm_choice")
-
-#                 clear
-#                 update_header
-
-#                 if grep -q "$selected_distributed_type" <<<"$new_swarm"; then
-#                     DISTRIBUTED_TYPE=$distributed_type_new_swarm
-#                     MODEL_NAME=$(
-#                         gum input --cursor.foreground "${main_color}" \
-#                             --prompt.foreground "${main_color}" \
-#                             --prompt "Which model would you like to run? " \
-#                             --placeholder "$MODEL_NAME" \
-#                             --width 80 \
-#                             --value "$MODEL_NAME"
-#                     )
-
-
-#                 else
-#                     DISTRIBUTED_TYPE=$distributed_type_existing_swarm
-#                     swarms_map=$(get_swarms_map)
-#                     model_names=$(get_model_names "$swarms_map")
-#                     echo -e "Which existing $(gum style --foreground "$main_color" "swarm") would you like to join?"
-#                     MODEL_NAME=$(echo "$model_names" | gum choose)
-
-#                     initial_peer_id=$(get_node_id "$swarms_map" "$MODEL_NAME")
-#                     node_lookup_id=$(create_combined_node_id "$swarms_map" "$MODEL_NAME")
-#                     initial_peer_ip=$(fetch_network_address "$node_lookup_id")
-
-#                     INITIAL_PEER="/ip4/$initial_peer_ip/tcp/31330/p2p/$initial_peer_id"
-
-#                 fi
-
-#             else
-#                 MINER_TYPE=$miner_type_non_distributed
-#                 DISTRIBUTED_TYPE=$distributed_type_none
-#                 IS_DIST=False # deprecrated: update containers to rely on DISTRIBUTED_TYPE instead of IS_DIST
-#                 MODEL_NAME=$(
-#                     gum input --cursor.foreground "${main_color}" \
-#                         --prompt.foreground "${main_color}" \
-#                         --prompt "Which model would you like to run? " \
-#                         --placeholder "nlptown/bert-base-multilingual-uncased-sentiment" \
-#                         --width 160 \
-#                         --value "$MODEL_NAME"
-#                 )
-
-
-#             fi
-#             clear
-#             update_header
-#         fi
-#     else
-#         MINER_TYPE=$miner_type_agnostic
-#         DISTRIBUTED_TYPE=$distributed_type_agnostic
-#         IS_MINER="yes"
-#         IS_DIST=False
-#     fi
-# fi
 fi
 NESA_NODE_TYPE="nesa"
 MINER_TYPE=$miner_type_agnostic
@@ -1157,7 +853,7 @@ IS_DIST=False
 
 save_to_env_file
 
-clear
+# clear
 update_header
 
 display_config
