@@ -666,7 +666,7 @@ save_to_env_file() {
   update_config_var "$base_env_file" "REF_CODE" "$REF_CODE"
   update_config_var "$base_env_file" "PUBLIC_IP" "$PUBLIC_IP"
   update_config_var "$base_env_file" "CHAIN_ID" "$CHAIN_ID"
-
+  
   # update_config_var "$base_env_file" "ORC_PORT" "$ORC_PORT"
   # update_config_var "$base_env_file" "NODE_OS" "$NODE_OS"
   # update_config_var "$base_env_file" "NODE_ARCH" "$NODE_ARCH"
@@ -709,8 +709,9 @@ display_config() {
 
 }
 
-: "${INGEST_URL:=http://localhost:8080/ingest}"
-export NODE_ID MONIKER PUBLIC_IP INGEST_URL
+CONTAINER_INGEST_URL="${CONTAINER_INGEST_URL:-http://host.docker.internal:8080/ingest}"
+export INGEST_URL="$CONTAINER_INGEST_URL"
+export NODE_ID MONIKER PUBLIC_IP
 export NODE_PRIV_HEX="$NODE_PRIV_KEY"
 
 compose_up() {
