@@ -26,9 +26,16 @@ mkdir -p "${LOG_DIR}"
 
 # Mirror STDOUT and STDERR to file; only the copy to file is timestamped.
 # This preserves gum's interactive UI on the terminal.
-exec > >(tee >(awk '{ printf "[%s] %s\n", strftime("%Y-%m-%dT%H:%M:%SZ"), $0; fflush() }' >> "${LOG_DIR}/bootstrap.log"))
-exec 2> >(tee >(awk '{ printf "[%s] %s\n", strftime("%Y-%m-%dT%H:%M:%SZ"), $0; fflush() }' >> "${LOG_DIR}/bootstrap.log") >&2)
+# exec > >(tee >(awk '{ printf "[%s] %s\n", strftime("%Y-%m-%dT%H:%M:%SZ"), $0; fflush() }' >> "${LOG_DIR}/bootstrap.log"))
+# exec 2> >(tee >(awk '{ printf "[%s] %s\n", strftime("%Y-%m-%dT%H:%M:%SZ"), $0; fflush() }' >> "${LOG_DIR}/bootstrap.log") >&2)
 # -----------------------------------------------------------------------------------------------
+LOG_FILE="${LOG_DIR}/bootstrap.log"
+_ts() { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
+log_line(){ printf "[%s] %s\n" "$(_ts)" "$*" >> "$LOG_FILE"; }
+log_stream(){ while IFS= read -r line; do printf "[%s] %s\n" "$(_ts)" "$line" >> "$LOG_FILE"; done; }
+run_and_log(){ local title="$1"; shift; log_line "BEGIN: $title — $*";
+    if gum spin -s line --title "$title" -- "$@" 2> >(log_stream) | log_stream; then
+        log_line "END: $title (ok)"; return 0; else log_line "END: $title (fail)"; return 1; fi; }
 
 sigterm_handler() {
     printf "\n Aborting node setup. Cleaning up...\n"
@@ -630,7 +637,8 @@ save_to_env_file() {
     update_config_var "$orchestrator_env_file" "MONIKER" "$MONIKER"
     update_config_var "$orchestrator_env_file" "NESA_NODE_TYPE" "$NESA_NODE_TYPE"
     update_config_var "$orchestrator_env_file" "NODE_PRIV_KEY" "$NODE_PRIV_KEY"
-
+    update_config_var "$orchestrator_env_file" "NODE_PRIV_HEX" "$NODE_PRIV_KEY" 
+    
     # Base environment variables
     # update_config_var "$base_env_file" "MODEL_NAME" "$MODEL_NAME"
     update_config_var "$base_env_file" "MONIKER" "$MONIKER"
@@ -683,6 +691,9 @@ display_config() {
 }
 
 
+: "${INGEST_URL:=http://localhost:8080/ingest}"
+export NODE_ID MONIKER PUBLIC_IP INGEST_URL
+export NODE_PRIV_HEX="$NODE_PRIV_KEY"
 
 compose_up() {
   local compose_files="compose.yml"
@@ -697,7 +708,12 @@ compose_up() {
     files="${files} -f compose.logs.yml"
   fi
 
-  docker compose ${files} up --pull always -d --wait || { echo "Error: Docker Compose failed to start."; exit 1; }
+  docker compose ${files} \
+    --env-file /home/dr1ft/.nesa/env/base.env \
+    --env-file /home/dr1ft/.nesa/env/orchestrator.env \
+    up --pull always -d --wait \
+  || { echo "Error: Docker Compose failed to start."; exit 1; }
+
   echo "Docker Compose started successfully."
 }
 
