@@ -284,9 +284,36 @@ check_python_and_ecdsa() {
     exit 1
   fi
 
+  # Check and install required Python libraries
+  local missing_libs=()
+
   if ! python3 -c "import ecdsa" &>/dev/null; then
-    echo "The ecdsa library is not installed. Installing now..."
-    pip3 install ecdsa
+    missing_libs+=("ecdsa")
+  fi
+
+  if ! python3 -c "import base58" &>/dev/null; then
+    missing_libs+=("base58")
+  fi
+
+  if ! python3 -c "from cryptography.hazmat.primitives.asymmetric import ed25519" &>/dev/null; then
+    missing_libs+=("cryptography")
+  fi
+
+  if ! python3 -c "import mospy" &>/dev/null; then
+    missing_libs+=("mospy-wallet")
+  fi
+
+  if ! python3 -c "import httpx" &>/dev/null; then
+    missing_libs+=("httpx")
+  fi
+
+  if ! python3 -c "import betterproto" &>/dev/null; then
+    missing_libs+=("betterproto")
+  fi
+
+  if [ ${#missing_libs[@]} -gt 0 ]; then
+    echo "Installing required Python libraries: ${missing_libs[*]}..."
+    pip3 install "${missing_libs[@]}"
   fi
 }
 
@@ -615,6 +642,1206 @@ def private_key_to_public_key(private_key_hex):
 print(private_key_to_public_key('$private_key'))
 "
 }
+
+# Derive wallet address from private key (bech32 format)
+derive_wallet_address() {
+  local private_key="$1"
+  local prefix="${2:-nesa}"
+
+  python3 -c "
+import hashlib
+import ecdsa
+
+def bech32_polymod(values):
+    GEN = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3]
+    chk = 1
+    for v in values:
+        b = chk >> 25
+        chk = (chk & 0x1ffffff) << 5 ^ v
+        for i in range(5):
+            chk ^= GEN[i] if ((b >> i) & 1) else 0
+    return chk
+
+def bech32_hrp_expand(hrp):
+    return [ord(x) >> 5 for x in hrp] + [0] + [ord(x) & 31 for x in hrp]
+
+def bech32_create_checksum(hrp, data):
+    values = bech32_hrp_expand(hrp) + data
+    polymod = bech32_polymod(values + [0, 0, 0, 0, 0, 0]) ^ 1
+    return [(polymod >> 5 * (5 - i)) & 31 for i in range(6)]
+
+def bech32_encode(hrp, data):
+    combined = data + bech32_create_checksum(hrp, data)
+    return hrp + '1' + ''.join([\"qpzry9x8gf2tvdw0s3jn54khce6mua7l\"[d] for d in combined])
+
+def convertbits(data, frombits, tobits, pad=True):
+    acc = 0
+    bits = 0
+    ret = []
+    maxv = (1 << tobits) - 1
+    for value in data:
+        acc = (acc << frombits) | value
+        bits += frombits
+        while bits >= tobits:
+            bits -= tobits
+            ret.append((acc >> bits) & maxv)
+    if pad:
+        if bits:
+            ret.append((acc << (tobits - bits)) & maxv)
+    return ret
+
+def strip_0x_prefix(key_hex):
+    return key_hex[2:] if key_hex.startswith('0x') else key_hex
+
+def private_key_to_address(private_key_hex, prefix='$prefix'):
+    private_key_hex = strip_0x_prefix(private_key_hex)
+    private_key_bytes = bytes.fromhex(private_key_hex)
+    sk = ecdsa.SigningKey.from_string(private_key_bytes, curve=ecdsa.SECP256k1)
+    vk = sk.get_verifying_key()
+    public_key_compressed = b'\x02' + vk.to_string()[:32] if vk.to_string()[-1] % 2 == 0 else b'\x03' + vk.to_string()[:32]
+
+    sha256_hash = hashlib.sha256(public_key_compressed).digest()
+    ripemd160_hash = hashlib.new('ripemd160', sha256_hash).digest()
+
+    five_bit_data = convertbits(ripemd160_hash, 8, 5)
+    return bech32_encode(prefix, five_bit_data)
+
+print(private_key_to_address('$private_key'))
+"
+}
+
+# Generate NODE_ID from private key (deterministic derivation)
+# Algorithm: SHA256(priv_key) -> Ed25519 seed -> Ed25519 pubkey -> SHA256 -> Base58
+generate_node_id() {
+  local private_key="$1"
+  python3 -c "
+import hashlib
+import base58
+from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.hazmat.primitives import serialization
+
+def strip_0x_prefix(key_hex):
+    return key_hex[2:] if key_hex.startswith('0x') else key_hex
+
+def derive_node_id(private_key_hex):
+    private_key_hex = strip_0x_prefix(private_key_hex)
+    private_key_bytes = bytes.fromhex(private_key_hex)
+
+    # Derive Ed25519 seed from secp256k1 private key
+    seed = hashlib.sha256(private_key_bytes).digest()
+
+    # Create Ed25519 key from seed
+    ed_private_key = ed25519.Ed25519PrivateKey.from_private_bytes(seed)
+    ed_public_key = ed_private_key.public_key()
+
+    # Get raw public key bytes
+    public_bytes = ed_public_key.public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw
+    )
+
+    # Hash and encode
+    public_key_hash = hashlib.sha256(public_bytes).digest()
+    return base58.b58encode(public_key_hash).decode('utf-8')
+
+print(derive_node_id('$private_key'))
+"
+}
+
+# Check wallet balance (UNES tokens)
+check_wallet_balance() {
+  local wallet_address="$1"
+  local lcd_url="https://lcd.dev.nesa.ai"
+
+  log_line "Checking wallet balance for ${wallet_address}"
+
+  # Query balance via LCD REST API
+  local balance_endpoint="${lcd_url}/cosmos/bank/v1beta1/balances/${wallet_address}"
+
+  local json_data
+  local http_code
+  json_data=$(curl -s -w "\n%{http_code}" "$balance_endpoint" 2>&1)
+  http_code=$(echo "$json_data" | tail -1)
+  json_data=$(echo "$json_data" | sed '$d')
+
+  if [ "$http_code" != "200" ]; then
+    local err_msg="HTTP $http_code"
+    if [ -n "$json_data" ]; then
+      local api_err=$(echo "$json_data" | jq -r '.message // .error // empty' 2>/dev/null)
+      [ -n "$api_err" ] && err_msg="$err_msg: $api_err"
+    fi
+    echo "error|0|0|${err_msg}"
+    log_line "Error querying balance: $err_msg"
+    return 1
+  fi
+
+  # Extract UNES balance
+  local unes_balance
+  unes_balance=$(echo "$json_data" | jq -r '.balances[] | select(.denom == "unes") | .amount' 2>/dev/null)
+
+  if [ -z "$unes_balance" ] || [ "$unes_balance" = "null" ]; then
+    unes_balance="0"
+  fi
+
+  # Convert from microunes to UNES (use awk for consistent formatting with leading zeros)
+  local unes_display
+  unes_display=$(awk "BEGIN {printf \"%.6f\", $unes_balance / 1000000}")
+
+  echo "ok|$unes_balance|$unes_display"
+}
+
+# Check miner deposit status
+check_miner_deposit() {
+  local node_id="$1"
+  local lcd_url="https://lcd.dev.nesa.ai"
+
+  log_line "Checking miner deposit for node ${node_id}"
+
+  # Query miner via LCD REST API
+  local miner_endpoint="${lcd_url}/nesachain/dht/get_miner/${node_id}"
+
+  local json_data
+  local http_code
+  json_data=$(curl -s -w "\n%{http_code}" "$miner_endpoint" 2>&1)
+  http_code=$(echo "$json_data" | tail -1)
+  json_data=$(echo "$json_data" | sed '$d')
+
+  # Check for API-level errors (returned in JSON even with HTTP 200)
+  local api_code
+  api_code=$(echo "$json_data" | jq -r '.code // 0' 2>/dev/null)
+
+  if [ "$http_code" != "200" ] || [ "$api_code" != "0" ]; then
+    local err_msg="HTTP $http_code"
+    if [ -n "$json_data" ]; then
+      local api_err=$(echo "$json_data" | jq -r '.message // .error // empty' 2>/dev/null)
+      [ -n "$api_err" ] && err_msg="$api_err"
+    fi
+
+    # If error is "miner not found", treat it as not registered (not an error)
+    if [[ "$err_msg" == *"miner not found"* ]]; then
+      echo "ok|0|0|not_registered|unes"
+      return 0
+    fi
+
+    echo "error|0|0|not_registered|unes|${err_msg}"
+    log_line "Error querying miner: $err_msg"
+    return 1
+  fi
+
+  # Check if miner exists
+  local miner_exists
+  miner_exists=$(echo "$json_data" | jq -r '.miner' 2>/dev/null)
+
+  if [ "$miner_exists" = "null" ] || [ -z "$miner_exists" ]; then
+    echo "ok|0|0|not_registered|unes"
+    return 0
+  fi
+
+  # Extract deposit information
+  local deposit_amount
+  local deposit_denom
+  local bond_status
+
+  deposit_amount=$(echo "$json_data" | jq -r '.miner.deposit.amount // "0"')
+  deposit_denom=$(echo "$json_data" | jq -r '.miner.deposit.denom // "unes"')
+  bond_status=$(echo "$json_data" | jq -r '.miner.bond_status // 0')
+
+  # Convert bond status to readable format (handles both numeric and string enum)
+  case "$bond_status" in
+    0|"BOND_STATUS_UNBONDED") bond_status="unbonded" ;;
+    1|"BOND_STATUS_UNBONDING") bond_status="unbonding" ;;
+    2|"BOND_STATUS_BONDED") bond_status="bonded" ;;
+    *) bond_status="unknown" ;;
+  esac
+
+  # Convert from microunes to UNES (use awk for consistent formatting with leading zeros)
+  local deposit_display
+  deposit_display=$(awk "BEGIN {printf \"%.6f\", $deposit_amount / 1000000}")
+
+  echo "ok|$deposit_amount|$deposit_display|$bond_status|$deposit_denom"
+}
+
+# Check if node is registered on chain
+# Returns: ok|registered or ok|not_registered or error|message
+check_node_registered() {
+  local node_id="$1"
+  local lcd_url="https://lcd.dev.nesa.ai"
+
+  log_line "Checking node registration for ${node_id}"
+
+  local node_endpoint="${lcd_url}/nesachain/dht/get_node/${node_id}"
+
+  local json_data
+  local http_code
+  json_data=$(curl -s -w "\n%{http_code}" "$node_endpoint" 2>&1)
+  http_code=$(echo "$json_data" | tail -1)
+  json_data=$(echo "$json_data" | sed '$d')
+
+  local api_code
+  api_code=$(echo "$json_data" | jq -r '.code // 0' 2>/dev/null)
+
+  if [ "$http_code" != "200" ] || [ "$api_code" != "0" ]; then
+    local err_msg="HTTP $http_code"
+    if [ -n "$json_data" ]; then
+      local api_err=$(echo "$json_data" | jq -r '.message // .error // empty' 2>/dev/null)
+      [ -n "$api_err" ] && err_msg="$api_err"
+    fi
+
+    # "node not found" means not registered
+    if [[ "$err_msg" == *"node not found"* ]] || [[ "$err_msg" == *"not found"* ]]; then
+      echo "ok|not_registered"
+      return 0
+    fi
+
+    echo "error|${err_msg}"
+    return 1
+  fi
+
+  local node_exists
+  node_exists=$(echo "$json_data" | jq -r '.node.node_id // empty' 2>/dev/null)
+
+  if [ -z "$node_exists" ]; then
+    echo "ok|not_registered"
+  else
+    echo "ok|registered"
+  fi
+}
+
+# Register node on chain (MsgRegisterNode)
+# Returns: success|tx_hash or error|message
+register_node() {
+  local node_id="$1"
+  local private_key="$2"
+  local public_name="${3:-nesa-miner}"
+  local version="${4:-v1.0.0}"
+  local network_address="${5:-127.0.0.1:8080}"
+  local vram="${6:-8000000000}"
+  local network_rps="${7:-100.0}"
+
+  log_line "Registering node: node_id=$node_id"
+
+  python3 << PYEOF
+import sys
+import json
+from dataclasses import dataclass
+import betterproto
+from mospy import Account, Transaction
+from mospy.clients import HTTPClient
+from google.protobuf import any_pb2 as any_pb
+
+# Define MsgRegisterNode
+@dataclass(eq=False, repr=False)
+class MsgRegisterNode(betterproto.Message):
+    creator: str = betterproto.string_field(1)
+    node_id: str = betterproto.string_field(2)
+    public_name: str = betterproto.string_field(3)
+    version: str = betterproto.string_field(4)
+    network_address: str = betterproto.string_field(5)
+    wallet_address: str = betterproto.string_field(6)
+    vram: int = betterproto.uint64_field(7)
+    network_rps: float = betterproto.double_field(8)
+    using_relay: bool = betterproto.bool_field(9)
+
+try:
+    private_key = "${private_key}"
+    node_id = "${node_id}"
+    public_name = "${public_name}"
+    version = "${version}"
+    network_address = "${network_address}"
+    vram = int(${vram})
+    network_rps = float(${network_rps})
+
+    # Create account
+    account = Account(private_key=private_key, hrp="nesa")
+    wallet_address = account.address
+
+    # Create message
+    msg = MsgRegisterNode(
+        creator=wallet_address,
+        node_id=node_id,
+        public_name=public_name,
+        version=version,
+        network_address=network_address,
+        wallet_address=wallet_address,
+        vram=vram,
+        network_rps=network_rps,
+        using_relay=False
+    )
+
+    # Connect and load account
+    client = HTTPClient(api="https://lcd.dev.nesa.ai")
+    try:
+        client.load_account_data(account=account)
+    except Exception as load_err:
+        print(f"error|Account not found on chain. Please fund your wallet first: {wallet_address}")
+        sys.exit(0)
+
+    # Build transaction
+    tx = Transaction(account=account, gas=200000, chain_id="nesa")
+    tx.set_fee(amount=1000, denom="unes")
+
+    # Pack message into Any and add to transaction
+    msg_any = any_pb.Any()
+    msg_any.value = bytes(msg)
+    msg_any.type_url = "/dht.v1.MsgRegisterNode"
+    tx._tx_body.messages.append(msg_any)
+
+    # Get signed transaction bytes
+    tx_bytes = tx.get_tx_bytes_as_string()
+
+    # Broadcast using httpx for more control
+    import httpx
+    broadcast_url = "https://lcd.dev.nesa.ai/cosmos/tx/v1beta1/txs"
+    payload = {"tx_bytes": tx_bytes, "mode": "BROADCAST_MODE_SYNC"}
+
+    with httpx.Client(timeout=30.0) as http_client:
+        response = http_client.post(broadcast_url, json=payload)
+        result = response.json()
+
+    if "tx_response" in result:
+        tx_response = result["tx_response"]
+        code = tx_response.get("code", 0)
+        if code == 0:
+            txhash = tx_response.get("txhash", "unknown")
+            print(f"success|{txhash}")
+        else:
+            raw_log = tx_response.get("raw_log", "Unknown error")
+            print(f"error|{raw_log}")
+    else:
+        error_msg = result.get("message", str(result))
+        print(f"error|Broadcast failed: {error_msg}")
+
+except Exception as e:
+    print(f"error|{str(e)}")
+PYEOF
+}
+
+# Register miner on chain (MsgRegisterMiner)
+# Returns: success|tx_hash or error|message
+register_miner() {
+  local node_id="$1"
+  local private_key="$2"
+  local model_name="${3:-nesaorg/llama-3.2-1b-instruct-ee}"
+
+  log_line "Registering miner: node_id=$node_id model=$model_name"
+
+  python3 << PYEOF
+import sys
+import json
+from dataclasses import dataclass
+from typing import List
+import betterproto
+from mospy import Account, Transaction
+from mospy.clients import HTTPClient
+from google.protobuf import any_pb2 as any_pb
+import httpx
+
+# Define MsgRegisterMiner
+@dataclass(eq=False, repr=False)
+class MsgRegisterMiner(betterproto.Message):
+    creator: str = betterproto.string_field(1)
+    node_id: str = betterproto.string_field(2)
+    start_block: int = betterproto.uint64_field(3)
+    end_block: int = betterproto.uint64_field(4)
+    block_ids: List[int] = betterproto.uint32_field(5)
+    torch_dtype: str = betterproto.string_field(6)
+    quant_type: str = betterproto.string_field(7)
+    cache_tokens_left: int = betterproto.uint64_field(8)
+    inference_rps: float = betterproto.double_field(9)
+    model_name: str = betterproto.string_field(10)
+
+try:
+    private_key = "${private_key}"
+    node_id = "${node_id}"
+    model_name = "${model_name}"
+
+    # Create account
+    account = Account(private_key=private_key, hrp="nesa")
+    wallet_address = account.address
+
+    # Create message
+    msg = MsgRegisterMiner(
+        creator=wallet_address,
+        node_id=node_id,
+        start_block=1,
+        end_block=2,
+        block_ids=[0],
+        torch_dtype="fp16",
+        quant_type="fp4",
+        cache_tokens_left=0,
+        inference_rps=100.0,
+        model_name=model_name
+    )
+
+    # Connect and load account
+    client = HTTPClient(api="https://lcd.dev.nesa.ai")
+    try:
+        client.load_account_data(account=account)
+    except Exception as load_err:
+        print(f"error|Account not found on chain. Please fund your wallet first: {wallet_address}")
+        sys.exit(0)
+
+    # Build transaction
+    tx = Transaction(account=account, gas=200000, chain_id="nesa")
+    tx.set_fee(amount=1000, denom="unes")
+
+    # Pack message into Any and add to transaction
+    msg_any = any_pb.Any()
+    msg_any.value = bytes(msg)
+    msg_any.type_url = "/dht.v1.MsgRegisterMiner"
+    tx._tx_body.messages.append(msg_any)
+
+    # Get signed transaction bytes
+    tx_bytes = tx.get_tx_bytes_as_string()
+
+    # Broadcast using httpx
+    broadcast_url = "https://lcd.dev.nesa.ai/cosmos/tx/v1beta1/txs"
+    payload = {"tx_bytes": tx_bytes, "mode": "BROADCAST_MODE_SYNC"}
+
+    with httpx.Client(timeout=30.0) as http_client:
+        response = http_client.post(broadcast_url, json=payload)
+        result = response.json()
+
+    if "tx_response" in result:
+        tx_response = result["tx_response"]
+        code = tx_response.get("code", 0)
+        if code == 0:
+            txhash = tx_response.get("txhash", "unknown")
+            print(f"success|{txhash}")
+        else:
+            raw_log = tx_response.get("raw_log", "Unknown error")
+            print(f"error|{raw_log}")
+    else:
+        error_msg = result.get("message", str(result))
+        print(f"error|Broadcast failed: {error_msg}")
+
+except Exception as e:
+    print(f"error|{str(e)}")
+PYEOF
+}
+
+# Submit miner deposit transaction
+# Returns: success|tx_hash or error|message
+submit_miner_deposit() {
+  local node_id="$1"
+  local amount_microunes="$2"
+  local private_key="$3"
+
+  log_line "Submitting miner deposit: node_id=$node_id, amount=${amount_microunes}unes"
+
+  python3 << PYEOF
+import sys
+import json
+from dataclasses import dataclass
+import betterproto
+from mospy import Account, Transaction
+from mospy.clients import HTTPClient
+from google.protobuf import any_pb2 as any_pb
+import httpx
+
+# Define the Cosmos SDK Coin message
+@dataclass(eq=False, repr=False)
+class Coin(betterproto.Message):
+    denom: str = betterproto.string_field(1)
+    amount: str = betterproto.string_field(2)
+
+# Define MsgAddMinerDeposit
+@dataclass(eq=False, repr=False)
+class MsgAddMinerDeposit(betterproto.Message):
+    depositor: str = betterproto.string_field(1)
+    node_id: str = betterproto.string_field(2)
+    amount: Coin = betterproto.message_field(3)
+
+try:
+    private_key = "${private_key}"
+    node_id = "${node_id}"
+    amount_microunes = "${amount_microunes}"
+
+    # Create account from private key
+    account = Account(
+        private_key=private_key,
+        hrp="nesa",
+    )
+
+    # Load account data from chain
+    client = HTTPClient(api="https://lcd.dev.nesa.ai")
+    try:
+        client.load_account_data(account=account)
+    except Exception as load_err:
+        # Account might not exist yet (no funds received)
+        print(f"error|Account not found on chain. Please fund your wallet first: {account.address}")
+        sys.exit(0)
+
+    # Check if account has sequence (exists on chain)
+    if account.next_sequence is None:
+        print(f"error|Account not initialized on chain. Send funds to {account.address} first.")
+        sys.exit(0)
+
+    # Create transaction
+    tx = Transaction(
+        account=account,
+        gas=150000,
+        chain_id="nesa",
+    )
+    tx.set_fee(amount=1000, denom="unes")
+
+    # Create deposit message
+    msg = MsgAddMinerDeposit(
+        depositor=account.address,
+        node_id=node_id,
+        amount=Coin(denom="unes", amount=amount_microunes)
+    )
+
+    # Pack message into Any and add to transaction
+    msg_any = any_pb.Any()
+    msg_any.value = bytes(msg)
+    msg_any.type_url = "/dht.v1.MsgAddMinerDeposit"
+    tx._tx_body.messages.append(msg_any)
+
+    # Get signed transaction bytes
+    tx_bytes = tx.get_tx_bytes_as_string()
+
+    # Broadcast transaction
+    broadcast_url = "https://lcd.dev.nesa.ai/cosmos/tx/v1beta1/txs"
+    broadcast_payload = {
+        "tx_bytes": tx_bytes,
+        "mode": "BROADCAST_MODE_SYNC"
+    }
+
+    response = httpx.post(broadcast_url, json=broadcast_payload, timeout=30)
+    result = response.json()
+
+    # Check for errors
+    if "tx_response" in result:
+        tx_response = result["tx_response"]
+        code = tx_response.get("code", 0)
+        if code == 0:
+            tx_hash = tx_response.get("txhash", "")
+            print(f"success|{tx_hash}")
+        else:
+            raw_log = tx_response.get("raw_log", "Unknown error")
+            print(f"error|Transaction failed (code {code}): {raw_log}")
+    else:
+        error_msg = result.get("message", str(result))
+        print(f"error|Broadcast failed: {error_msg}")
+
+except Exception as e:
+    print(f"error|{str(e)}")
+PYEOF
+}
+
+# Add miner deposit - wrapper with UI
+add_miner_deposit() {
+  local node_id="$1"
+  local amount_unes="$2"
+
+  log_line "Add miner deposit: node_id=$node_id, amount=${amount_unes} UNES"
+
+  # Convert UNES to microunes
+  local amount_microunes
+  if command -v bc >/dev/null 2>&1; then
+    amount_microunes=$(echo "$amount_unes * 1000000" | bc | cut -d. -f1)
+  else
+    amount_microunes=$(awk "BEGIN {printf \"%.0f\", $amount_unes * 1000000}")
+  fi
+
+  # Load private key from config
+  if [ -z "$NODE_PRIV_HEX" ]; then
+    local orchestrator_env_file="${env_dir}/orchestrator.env"
+    if [ -f "$orchestrator_env_file" ]; then
+      source "$orchestrator_env_file" 2>/dev/null || true
+    fi
+  fi
+
+  if [ -z "$NODE_PRIV_HEX" ]; then
+    echo "error|Private key not found"
+    return 1
+  fi
+
+  # Submit the transaction
+  local result
+  result=$(submit_miner_deposit "$node_id" "$amount_microunes" "$NODE_PRIV_HEX")
+
+  echo "$result"
+}
+
+# Interactive deposit flow with nice UI
+# Returns: 0 if deposit successful or skipped, 1 if failed
+show_deposit_flow() {
+  local wallet_address="$1"
+  local node_id="$2"
+  local private_key="$3"
+
+  log_line "Starting deposit flow for wallet=$wallet_address node=$node_id"
+
+  # Fetch all required data
+  echo ""
+  gum spin -s line --title "Fetching wallet and deposit info..." -- sleep 1
+
+  # Get wallet balance
+  local balance_result
+  balance_result=$(check_wallet_balance "$wallet_address")
+  local balance_status=$(echo "$balance_result" | cut -d'|' -f1)
+  local balance_microunes=$(echo "$balance_result" | cut -d'|' -f2)
+  local balance_display=$(echo "$balance_result" | cut -d'|' -f3)
+
+  if [ "$balance_status" != "ok" ]; then
+    gum style --foreground 196 "Failed to fetch wallet balance"
+    return 1
+  fi
+
+  # Get minimum deposit requirements
+  local params_result
+  params_result=$(check_min_deposit)
+  local params_status=$(echo "$params_result" | cut -d'|' -f1)
+  local min_deposit_microunes=$(echo "$params_result" | cut -d'|' -f2)
+  local min_deposit_display=$(echo "$params_result" | cut -d'|' -f3)
+
+  if [ "$params_status" != "ok" ]; then
+    gum style --foreground 196 "Failed to fetch deposit requirements"
+    return 1
+  fi
+
+  # Get current miner deposit
+  local deposit_result
+  deposit_result=$(check_miner_deposit "$node_id")
+  local deposit_status=$(echo "$deposit_result" | cut -d'|' -f1)
+  local current_deposit_microunes=$(echo "$deposit_result" | cut -d'|' -f2)
+  local current_deposit_display=$(echo "$deposit_result" | cut -d'|' -f3)
+  local bond_status=$(echo "$deposit_result" | cut -d'|' -f4)
+
+  if [ "$deposit_status" != "ok" ]; then
+    current_deposit_microunes="0"
+    current_deposit_display="0.000000"
+    bond_status="not_registered"
+  fi
+
+  # Calculate shortfall
+  local shortfall_microunes=$((min_deposit_microunes - current_deposit_microunes))
+  if [ "$shortfall_microunes" -lt 0 ]; then
+    shortfall_microunes=0
+  fi
+
+  local shortfall_display
+  shortfall_display=$(awk "BEGIN {printf \"%.6f\", $shortfall_microunes / 1000000}")
+
+  # Check if miner is not registered - auto-register node and miner
+  if [ "$bond_status" = "not_registered" ]; then
+    echo ""
+    gum style --border normal --padding "1 2" --border-foreground 214 \
+      "$(gum style --foreground 214 --bold "⚠ Registration Required")
+
+Your node and miner are not yet registered on the blockchain.
+Registering them now..."
+
+    # Step 1: Check and register node
+    echo ""
+    gum spin -s line --title "Checking node registration..." -- sleep 1
+
+    local node_check
+    node_check=$(check_node_registered "$node_id")
+    local node_status=$(echo "$node_check" | cut -d'|' -f2)
+
+    if [ "$node_status" = "not_registered" ]; then
+      echo ""
+      gum style --foreground 43 "Registering node on blockchain..."
+
+      local node_result
+      node_result=$(register_node "$node_id" "$private_key")
+      local node_tx_status=$(echo "$node_result" | cut -d'|' -f1)
+      local node_tx_data=$(echo "$node_result" | cut -d'|' -f2-)
+
+      if [ "$node_tx_status" = "success" ]; then
+        gum style --foreground 42 "✓ Node registered! TX: ${node_tx_data}"
+        gum spin -s line --title "Waiting for transaction to be confirmed..." -- sleep 5
+      else
+        echo ""
+        gum style --border normal --padding "1 2" --border-foreground 196 \
+          "$(gum style --foreground 196 --bold "✗ Node Registration Failed")
+
+Error: $node_tx_data"
+        echo ""
+        read -p "> Press Enter to continue..."
+        return 1
+      fi
+    else
+      gum style --foreground 42 "✓ Node already registered"
+    fi
+
+    # Step 2: Register miner
+    echo ""
+    gum spin -s line --title "Registering miner..." -- sleep 1
+
+    local miner_result
+    miner_result=$(register_miner "$node_id" "$private_key" "nesaorg/llama-3.2-1b-instruct-ee")
+    local miner_tx_status=$(echo "$miner_result" | cut -d'|' -f1)
+    local miner_tx_data=$(echo "$miner_result" | cut -d'|' -f2-)
+
+    if [ "$miner_tx_status" = "success" ]; then
+      gum style --foreground 42 "✓ Miner registered! TX: ${miner_tx_data}"
+      gum spin -s line --title "Waiting for transaction to be confirmed..." -- sleep 5
+    else
+      # Check if error is "miner already registered"
+      if [[ "$miner_tx_data" == *"already"* ]] || [[ "$miner_tx_data" == *"exists"* ]]; then
+        gum style --foreground 42 "✓ Miner already registered"
+      else
+        echo ""
+        gum style --border normal --padding "1 2" --border-foreground 196 \
+          "$(gum style --foreground 196 --bold "✗ Miner Registration Failed")
+
+Error: $miner_tx_data"
+        echo ""
+        read -p "> Press Enter to continue..."
+        return 1
+      fi
+    fi
+
+    echo ""
+    gum style --foreground 42 --bold "✓ Registration complete! Now let's add your deposit."
+    echo ""
+    read -p "> Press Enter to continue to deposit..."
+
+    # Refresh deposit info after registration
+    deposit_result=$(check_miner_deposit "$node_id")
+    deposit_status=$(echo "$deposit_result" | cut -d'|' -f1)
+    current_deposit_microunes=$(echo "$deposit_result" | cut -d'|' -f2)
+    current_deposit_display=$(echo "$deposit_result" | cut -d'|' -f3)
+    bond_status=$(echo "$deposit_result" | cut -d'|' -f4)
+  fi
+
+  # Check if deposit is already sufficient
+  if [ "$current_deposit_microunes" -ge "$min_deposit_microunes" ]; then
+    echo ""
+    gum style --border normal --padding "1 2" --border-foreground 42 \
+      "$(gum style --foreground 42 --bold "✓ Deposit Status: OK")
+
+Your current deposit meets the minimum requirement.
+
+Current Deposit: $(gum style --foreground 42 "${current_deposit_display} UNES")
+Minimum Required: ${min_deposit_display} UNES
+Bond Status: ${bond_status}"
+    echo ""
+    return 0
+  fi
+
+  # Calculate gas fee estimate (fixed)
+  local gas_fee_microunes=1000
+  local gas_fee_display="0.001000"
+
+  # Show deposit required screen
+  while true; do
+    clear
+    update_header
+
+    echo ""
+    gum style --border double --padding "1 2" --border-foreground 214 \
+      "$(gum style --foreground 214 --bold "💰 MINER DEPOSIT REQUIRED")
+
+$(gum style --foreground 250 "Your node requires a deposit to participate in the network.")
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  $(gum style --foreground 43 "Wallet Address:")   ${wallet_address}
+  $(gum style --foreground 43 "Wallet Balance:")   $(gum style --bold "${balance_display} UNES")
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  $(gum style --foreground 43 "Minimum Required:")   ${min_deposit_display} UNES
+  $(gum style --foreground 43 "Current Deposit:")    ${current_deposit_display} UNES
+  $(gum style --foreground 214 "Amount Needed:")      ${shortfall_display} UNES
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  $(gum style --foreground 250 "Estimated Gas Fee:")  ~${gas_fee_display} UNES
+
+$(gum style --foreground 250 --italic "Note: Deposits are held in escrow and can be withdrawn
+after a 7-day unbonding period.")"
+
+    echo ""
+
+    # Get deposit amount from user
+    local default_amount="$shortfall_display"
+    if [ "$shortfall_microunes" -eq 0 ]; then
+      default_amount="$min_deposit_display"
+    fi
+
+    local deposit_amount
+    deposit_amount=$(gum input \
+      --placeholder "Enter deposit amount in UNES" \
+      --value "$default_amount" \
+      --prompt "Amount to deposit: " \
+      --prompt.foreground "$main_color")
+
+    # Handle empty input or cancel
+    if [ -z "$deposit_amount" ]; then
+      echo ""
+      local skip_choice
+      skip_choice=$(gum choose --cursor.foreground 196 "Try again" "Skip deposit (node won't work properly)")
+      if [ "$skip_choice" = "Skip deposit (node won't work properly)" ]; then
+        gum style --foreground 214 "⚠ Skipping deposit. Your node may not function correctly."
+        return 0
+      fi
+      continue
+    fi
+
+    # Convert to microunes for validation
+    local deposit_microunes
+    if command -v bc >/dev/null 2>&1; then
+      deposit_microunes=$(echo "$deposit_amount * 1000000" | bc | cut -d. -f1)
+    else
+      deposit_microunes=$(awk "BEGIN {printf \"%.0f\", $deposit_amount * 1000000}")
+    fi
+
+    # Validate amount
+    local total_needed=$((deposit_microunes + gas_fee_microunes))
+
+    if [ "$deposit_microunes" -le 0 ]; then
+      gum style --foreground 196 "Amount must be greater than 0"
+      sleep 2
+      continue
+    fi
+
+    if [ "$total_needed" -gt "$balance_microunes" ]; then
+      gum style --foreground 196 "Insufficient balance. You need ${deposit_amount} UNES + ~${gas_fee_display} UNES for gas."
+      gum style --foreground 196 "Your balance: ${balance_display} UNES"
+      sleep 3
+      continue
+    fi
+
+    # Calculate final deposit
+    local final_deposit_microunes=$((current_deposit_microunes + deposit_microunes))
+    local final_deposit_display
+    final_deposit_display=$(awk "BEGIN {printf \"%.6f\", $final_deposit_microunes / 1000000}")
+
+    local remaining_balance_microunes=$((balance_microunes - total_needed))
+    local remaining_balance_display
+    remaining_balance_display=$(awk "BEGIN {printf \"%.6f\", $remaining_balance_microunes / 1000000}")
+
+    local meets_minimum="✗ Below minimum"
+    local meets_color=196
+    if [ "$final_deposit_microunes" -ge "$min_deposit_microunes" ]; then
+      meets_minimum="✓ Meets minimum"
+      meets_color=42
+    fi
+
+    # Show confirmation
+    echo ""
+    gum style --border normal --padding "1 2" --border-foreground 43 \
+      "$(gum style --foreground 43 --bold "📋 TRANSACTION SUMMARY")
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Deposit Amount:      ${deposit_amount} UNES
+  Estimated Gas:       ~${gas_fee_display} UNES
+  ────────────────────────────────────────────────────────────────
+  Total Cost:          $(gum style --bold "$(awk "BEGIN {printf \"%.6f\", ($deposit_microunes + $gas_fee_microunes) / 1000000}") UNES")
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  $(gum style --foreground 250 "AFTER TRANSACTION:")
+  Your Deposit:        ${final_deposit_display} UNES  $(gum style --foreground $meets_color "$meets_minimum")
+  Remaining Balance:   ${remaining_balance_display} UNES"
+
+    echo ""
+
+    # Confirm
+    local confirm
+    confirm=$(gum choose --cursor.foreground 42 "Submit Deposit" "Change Amount" "Skip (not recommended)")
+
+    case "$confirm" in
+      "Submit Deposit")
+        echo ""
+        gum spin -s line --title "Submitting deposit transaction..." -- sleep 1
+
+        # Actually submit the transaction
+        local tx_result
+        tx_result=$(add_miner_deposit "$node_id" "$deposit_amount")
+
+        local tx_status=$(echo "$tx_result" | cut -d'|' -f1)
+        local tx_data=$(echo "$tx_result" | cut -d'|' -f2-)
+
+        if [ "$tx_status" = "success" ]; then
+          echo ""
+          gum style --border normal --padding "1 2" --border-foreground 42 \
+            "$(gum style --foreground 42 --bold "✓ DEPOSIT SUCCESSFUL!")
+
+Transaction Hash: $(gum style --foreground 69 "$tx_data")
+
+Your deposit of ${deposit_amount} UNES has been submitted.
+It may take a few seconds to confirm on-chain."
+          echo ""
+          sleep 3
+          return 0
+        else
+          echo ""
+          gum style --border normal --padding "1 2" --border-foreground 196 \
+            "$(gum style --foreground 196 --bold "✗ DEPOSIT FAILED")
+
+Error: $tx_data
+
+Please try again or check your wallet balance."
+          echo ""
+          sleep 3
+          continue
+        fi
+        ;;
+      "Change Amount")
+        continue
+        ;;
+      "Skip (not recommended)")
+        gum style --foreground 214 "⚠ Skipping deposit. Your node may not function correctly."
+        return 0
+        ;;
+    esac
+  done
+}
+
+# Check minimum deposit requirements
+check_min_deposit() {
+  local lcd_url="https://lcd.dev.nesa.ai"
+  local params_endpoint="${lcd_url}/nesachain/dht/params"
+
+  log_line "Checking minimum deposit requirements"
+
+  local json_data
+  local http_code
+  json_data=$(curl -s -w "\n%{http_code}" "$params_endpoint" 2>&1)
+  http_code=$(echo "$json_data" | tail -1)
+  json_data=$(echo "$json_data" | sed '$d')
+
+  if [ "$http_code" != "200" ]; then
+    echo "error|Failed to fetch params"
+    return 1
+  fi
+
+  # Extract miner and orchestrator minimum deposits
+  local miner_min_amount=$(echo "$json_data" | jq -r '.params.miner_min_deposit.amount // "0"')
+  local miner_min_denom=$(echo "$json_data" | jq -r '.params.miner_min_deposit.denom // "unes"')
+  local orch_min_amount=$(echo "$json_data" | jq -r '.params.orchestrator_min_deposit.amount // "0"')
+  local orch_min_denom=$(echo "$json_data" | jq -r '.params.orchestrator_min_deposit.denom // "unes"')
+
+  # Extract unbonding periods
+  local miner_unbond=$(echo "$json_data" | jq -r '.params.miner_unbonding_period // "0s"')
+  local orch_unbond=$(echo "$json_data" | jq -r '.params.orchestrator_unbonding_period // "0s"')
+
+  # Convert to UNES for display (using awk for consistent formatting with leading zeros)
+  local miner_min_display
+  local orch_min_display
+  miner_min_display=$(awk "BEGIN {printf \"%.6f\", $miner_min_amount / 1000000}")
+  orch_min_display=$(awk "BEGIN {printf \"%.6f\", $orch_min_amount / 1000000}")
+
+  # Normalize denom for display (unes -> UNES)
+  local miner_denom_display="UNES"
+  local orch_denom_display="UNES"
+  if [ "$miner_min_denom" != "unes" ]; then
+    miner_denom_display=$(echo "$miner_min_denom" | tr '[:lower:]' '[:upper:]')
+  fi
+  if [ "$orch_min_denom" != "unes" ]; then
+    orch_denom_display=$(echo "$orch_min_denom" | tr '[:lower:]' '[:upper:]')
+  fi
+
+  echo "ok|$miner_min_amount|$miner_min_display|$miner_denom_display|$orch_min_amount|$orch_min_display|$orch_denom_display|$miner_unbond|$orch_unbond"
+}
+
+# Management menu for balance and deposit operations
+show_management_menu() {
+  while true; do
+    update_header
+
+    # Load configuration
+    local config_env_file="${env_dir}/.env"
+    local orchestrator_env_file="${env_dir}/orchestrator.env"
+
+    if [ ! -f "$orchestrator_env_file" ]; then
+      echo "Error: Configuration not found. Please run the bootstrap wizard first."
+      return 1
+    fi
+
+    # Source the config to get NODE_PRIV_HEX
+    source "$orchestrator_env_file" 2>/dev/null || true
+
+    if [ -z "$NODE_PRIV_HEX" ]; then
+      echo "Error: Private key not found in configuration."
+      return 1
+    fi
+
+    # Derive wallet address
+    local wallet_address
+    wallet_address=$(derive_wallet_address "$NODE_PRIV_HEX" "nesa")
+
+    # Get node ID if available
+    local node_id=""
+    if [ -f "$node_id_file" ]; then
+      node_id=$(cat "$node_id_file" 2>/dev/null | tr -d '\n\r')
+    fi
+
+    # Show current status
+    echo ""
+    gum style --border normal --padding "1 2" --border-foreground "$main_color" \
+      "$(gum style --foreground "$main_color" --bold "Miner Management")
+
+Wallet Address: $wallet_address
+Node ID: ${node_id:-"(not available - start your node first)"}"
+
+    echo ""
+
+    # Menu options
+    local choice
+    choice=$(gum choose \
+      --cursor.foreground "$main_color" \
+      --item.foreground "$link_color" \
+      "Check Wallet Balance" \
+      "Check Miner Deposit Status" \
+      "Check Minimum Deposit Requirements" \
+      "Add Miner Deposit" \
+      "Return to Main Menu" \
+      "Exit")
+
+    case "$choice" in
+      "Check Wallet Balance")
+        echo ""
+        gum spin -s line --title "Fetching wallet balance..." -- sleep 1
+
+        local balance_result
+        balance_result=$(check_wallet_balance "$wallet_address")
+        local status=$(echo "$balance_result" | cut -d'|' -f1)
+        local balance_micro=$(echo "$balance_result" | cut -d'|' -f2)
+        local balance_display=$(echo "$balance_result" | cut -d'|' -f3)
+        local error_msg=$(echo "$balance_result" | cut -d'|' -f4-)
+
+        echo ""
+        if [ "$status" = "ok" ]; then
+          gum style --border double --padding "1 2" --border-foreground "$main_color" \
+            "$(gum style --foreground "$main_color" --bold "Wallet Balance")
+
+Balance: $(gum style --foreground "$main_color" --bold "$balance_display UNES")
+         ($balance_micro microunes)"
+        else
+          echo "Error: Failed to fetch wallet balance."
+          if [ -n "$error_msg" ]; then
+            echo ""
+            echo "Details: $error_msg"
+          fi
+          echo ""
+          echo "Check logs at: ~/.nesa/logs/bootstrap.log"
+        fi
+        echo ""
+        gum input --placeholder "Press Enter to continue..."
+        ;;
+
+      "Check Miner Deposit Status")
+        if [ -z "$node_id" ]; then
+          echo ""
+          echo "Error: Node ID not found. Please start your node first to generate a Node ID."
+          echo ""
+          gum input --placeholder "Press Enter to continue..."
+          continue
+        fi
+
+        echo ""
+        gum spin -s line --title "Fetching miner deposit status..." -- sleep 1
+
+        local deposit_result
+        deposit_result=$(check_miner_deposit "$node_id")
+        local status=$(echo "$deposit_result" | cut -d'|' -f1)
+        local deposit_micro=$(echo "$deposit_result" | cut -d'|' -f2)
+        local deposit_display=$(echo "$deposit_result" | cut -d'|' -f3)
+        local bond_status=$(echo "$deposit_result" | cut -d'|' -f4)
+        local error_msg=$(echo "$deposit_result" | cut -d'|' -f5-)
+
+        echo ""
+        if [ "$status" = "ok" ]; then
+          local status_color="$main_color"
+          case "$bond_status" in
+            "bonded") status_color="2" ;;  # green
+            "unbonding") status_color="3" ;;  # yellow
+            "unbonded") status_color="1" ;;  # red
+            "not_registered") status_color="8" ;;  # gray
+          esac
+
+          gum style --border double --padding "1 2" --border-foreground "$main_color" \
+            "$(gum style --foreground "$main_color" --bold "Miner Deposit Status")
+
+Node ID: $node_id
+Deposit: $(gum style --foreground "$main_color" --bold "$deposit_display UNES")
+         ($deposit_micro microunes)
+Status:  $(gum style --foreground "$status_color" --bold "$bond_status")"
+        else
+          echo "Error: Failed to fetch miner deposit status."
+          if [ -n "$error_msg" ]; then
+            echo ""
+            echo "Details: $error_msg"
+          fi
+          echo ""
+          echo "Check logs at: ~/.nesa/logs/bootstrap.log"
+        fi
+        echo ""
+        gum input --placeholder "Press Enter to continue..."
+        ;;
+
+      "Check Minimum Deposit Requirements")
+        echo ""
+        gum spin -s line --title "Fetching chain parameters..." -- sleep 1
+
+        local params_result
+        params_result=$(check_min_deposit)
+        local status=$(echo "$params_result" | cut -d'|' -f1)
+
+        echo ""
+        if [ "$status" = "ok" ]; then
+          local miner_min_micro=$(echo "$params_result" | cut -d'|' -f2)
+          local miner_min_display=$(echo "$params_result" | cut -d'|' -f3)
+          local miner_denom=$(echo "$params_result" | cut -d'|' -f4)
+          local orch_min_micro=$(echo "$params_result" | cut -d'|' -f5)
+          local orch_min_display=$(echo "$params_result" | cut -d'|' -f6)
+          local orch_denom=$(echo "$params_result" | cut -d'|' -f7)
+          local miner_unbond=$(echo "$params_result" | cut -d'|' -f8)
+          local orch_unbond=$(echo "$params_result" | cut -d'|' -f9)
+
+          gum style --border double --padding "1 2" --border-foreground "$main_color" \
+            "$(gum style --foreground "$main_color" --bold "Miner Deposit Requirements")
+
+Minimum Deposit:    $(gum style --foreground "$main_color" --bold "$miner_min_display $miner_denom")
+Unbonding Period:   $miner_unbond
+
+$(gum style --foreground "8" "Note: You can add deposits anytime. Withdrawals require the unbonding period.")"
+        else
+          local error_msg=$(echo "$params_result" | cut -d'|' -f2-)
+          echo "Error: $error_msg"
+        fi
+        echo ""
+        gum input --placeholder "Press Enter to continue..."
+        ;;
+
+      "Add Miner Deposit")
+        if [ -z "$node_id" ]; then
+          echo ""
+          echo "Error: Node ID not found. Please start your node first to generate a Node ID."
+          echo ""
+          gum input --placeholder "Press Enter to continue..."
+          continue
+        fi
+
+        # Use the full deposit flow which includes registration check
+        show_deposit_flow "$wallet_address" "$node_id" "$NODE_PRIV_HEX"
+        ;;
+
+      "Return to Main Menu")
+        return 0
+        ;;
+
+      "Exit")
+        echo "Goodbye!"
+        exit 0
+        ;;
+
+      *)
+        return 0
+        ;;
+    esac
+  done
+}
+
 log_line "[STAGE 4]: collect config (${mode})"
 
 update_config_var() {
@@ -659,6 +1886,11 @@ save_to_env_file() {
   update_config_var "$orchestrator_env_file" "NODE_PRIV_KEY" "$NODE_PRIV_KEY"
   update_config_var "$orchestrator_env_file" "NODE_PRIV_HEX" "$NODE_PRIV_KEY"
 
+  # Save NODE_ID if available (so orchestrator doesn't regenerate)
+  if [[ -n "$NODE_ID" && "$NODE_ID" != "pending..." ]]; then
+    update_config_var "$orchestrator_env_file" "NODE_ID" "$NODE_ID"
+  fi
+
   # Base environment variables
   # update_config_var "$base_env_file" "MODEL_NAME" "$MODEL_NAME"
   update_config_var "$base_env_file" "MONIKER" "$MONIKER"
@@ -666,7 +1898,7 @@ save_to_env_file() {
   update_config_var "$base_env_file" "REF_CODE" "$REF_CODE"
   update_config_var "$base_env_file" "PUBLIC_IP" "$PUBLIC_IP"
   update_config_var "$base_env_file" "CHAIN_ID" "$CHAIN_ID"
-  
+
   # update_config_var "$base_env_file" "ORC_PORT" "$ORC_PORT"
   # update_config_var "$base_env_file" "NODE_OS" "$NODE_OS"
   # update_config_var "$base_env_file" "NODE_ARCH" "$NODE_ARCH"
@@ -751,6 +1983,34 @@ load_node_id() {
   fi
 }
 
+# Generate and save NODE_ID from private key (if not already exists)
+ensure_node_id() {
+  local private_key="$1"
+
+  # If node_id.id already exists, use it (backwards compatibility)
+  if [[ -f "$node_id_file" ]]; then
+    NODE_ID=$(cat "$node_id_file")
+    log_line "Using existing NODE_ID: $NODE_ID"
+    return 0
+  fi
+
+  # Generate NODE_ID from private key
+  if [[ -n "$private_key" ]]; then
+    local identity_dir
+    identity_dir=$(dirname "$node_id_file")
+    mkdir -p "$identity_dir"
+
+    NODE_ID=$(generate_node_id "$private_key")
+
+    # Save to file
+    echo -n "$NODE_ID" > "$node_id_file"
+    log_line "Generated and saved NODE_ID: $NODE_ID"
+  else
+    NODE_ID="pending..."
+    log_line "No private key available, NODE_ID pending"
+  fi
+}
+
 load_from_env_file() {
   if [ -f "$config_env_file" ]; then
     source "$config_env_file"
@@ -807,6 +2067,59 @@ check_python_and_ecdsa
 detect_hardware_capabilities
 # clear
 update_header
+
+# Check if node is already configured
+if [ -f "$orchestrator_env_file" ] && [ -f "$config_env_file" ]; then
+  # Node is already configured, offer options
+  echo ""
+  gum style --border normal --padding "1 2" --border-foreground "$main_color" \
+    "$(gum style --foreground "$main_color" --bold "Existing Configuration Detected")
+
+Your Nesa node is already configured."
+
+  echo ""
+  echo "What would you like to do?"
+  echo ""
+
+  existing_choice=$(gum choose \
+    --cursor.foreground "$main_color" \
+    --item.foreground "$link_color" \
+    "Manage Wallet & Deposits" \
+    "Start/Restart Node" \
+    "Reconfigure Node (Run Wizard Again)" \
+    "Exit")
+
+  case "$existing_choice" in
+    "Manage Wallet & Deposits")
+      show_management_menu
+      exit 0
+      ;;
+    "Start/Restart Node")
+      update_header
+      echo "Starting node containers..."
+      cd "$WORKING_DIRECTORY/docker" || {
+        echo "Error: Docker directory does not exist."
+        exit 1
+      }
+      compose_up
+      echo ""
+      echo -e "$(gum style --foreground "$main_color" "nesa") node containers started!"
+      echo ""
+      if gum confirm "Would you like to manage your wallet balance and miner deposit now?"; then
+        cd "$init_pwd" || exit
+        show_management_menu
+      fi
+      exit 0
+      ;;
+    "Reconfigure Node (Run Wizard Again)")
+      echo "Proceeding to reconfiguration wizard..."
+      sleep 1
+      ;;
+    "Exit")
+      exit 0
+      ;;
+  esac
+fi
 
 echo -e "Select a $(gum style --foreground "$main_color" "mode")"
 wizard_mode="Wizardy"
@@ -882,6 +2195,10 @@ DISTRIBUTED_TYPE=$distributed_type_agnostic
 IS_MINER="yes"
 IS_DIST=False
 
+# Generate NODE_ID from private key (if not already exists)
+# This ensures NODE_ID is available before orchestrator starts
+ensure_node_id "$NODE_PRIV_KEY"
+
 save_to_env_file
 
 # clear
@@ -894,6 +2211,21 @@ if ! gum confirm "Do you want to start the node with the above configuration? ";
   exit 0
 fi
 
+# Check and handle deposit before starting containers
+log_line "[STAGE 5.5]: checking miner deposit"
+echo ""
+gum style --foreground "$main_color" --bold "Checking deposit status..."
+
+# Get wallet address
+WALLET_ADDRESS=$(derive_wallet_address "$NODE_PRIV_KEY" "nesa")
+
+# Show deposit flow (handles checking and prompting if needed)
+if ! show_deposit_flow "$WALLET_ADDRESS" "$NODE_ID" "$NODE_PRIV_KEY"; then
+  echo ""
+  gum style --foreground 214 "Warning: Could not verify deposit status. Continuing anyway..."
+  echo ""
+fi
+
 cd "$WORKING_DIRECTORY/docker" || {
   echo "Error: Docker directory does not exist."
   exit 1
@@ -904,4 +2236,14 @@ compose_up
 
 cd "$init_pwd" || return
 echo -e "Congratulations! Your $(gum style --foreground "$main_color" "nesa") node was successfully bootstrapped!"
+
+# Offer management menu
+echo ""
+if gum confirm "Would you like to manage your wallet balance and miner deposit now?"; then
+  show_management_menu
+fi
+
+echo ""
+echo "You can run this script again anytime to manage your deposits and check balances."
+echo ""
 # set +x
