@@ -3,6 +3,6 @@ expect.log
 *.swp
 *.swo
 *.un~
-
+.claude
 
 
