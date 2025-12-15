@@ -55,6 +55,29 @@ LOG_DIR="${DEFAULT_WORKDIR}/logs"
 ENV_DIR="${DEFAULT_WORKDIR}/env"
 mkdir -p "${DEFAULT_WORKDIR}" "${LOG_DIR}" "${ENV_DIR}"
 
+# Safe math helper - works on both GNU and BSD (Mac) awk
+# Usage: safe_divide <numerator> <divisor> <decimals>
+safe_divide() {
+  local num="${1:-0}"
+  local div="${2:-1}"
+  local dec="${3:-6}"
+  # Handle empty or non-numeric input
+  [ -z "$num" ] || [ "$num" = "" ] && num=0
+  [ -z "$div" ] || [ "$div" = "" ] || [ "$div" = "0" ] && div=1
+  awk -v n="$num" -v d="$div" -v p="$dec" 'BEGIN { printf "%.*f", p, n/d }'
+}
+
+# Safe multiply helper
+# Usage: safe_multiply <num1> <num2> <decimals>
+safe_multiply() {
+  local num1="${1:-0}"
+  local num2="${2:-1}"
+  local dec="${3:-0}"
+  [ -z "$num1" ] || [ "$num1" = "" ] && num1=0
+  [ -z "$num2" ] || [ "$num2" = "" ] && num2=1
+  awk -v a="$num1" -v b="$num2" -v p="$dec" 'BEGIN { printf "%.*f", p, a*b }'
+}
+
 : > "${LOG_DIR}/bootstrap.log"
 touch "${ENV_DIR}/base.env" "${ENV_DIR}/orchestrator.env" "${DEFAULT_WORKDIR}/.env"
 
@@ -861,7 +884,7 @@ check_wallet_balance() {
 
   # Convert from microunes to UNES (use awk for consistent formatting with leading zeros)
   local unes_display
-  unes_display=$(awk "BEGIN {printf \"%.6f\", $unes_balance / 1000000}")
+  unes_display=$(safe_divide "$unes_balance" 1000000 6)
 
   echo "ok|$unes_balance|$unes_display"
 }
@@ -932,7 +955,7 @@ check_miner_deposit() {
 
   # Convert from microunes to UNES (use awk for consistent formatting with leading zeros)
   local deposit_display
-  deposit_display=$(awk "BEGIN {printf \"%.6f\", $deposit_amount / 1000000}")
+  deposit_display=$(safe_divide "$deposit_amount" 1000000 6)
 
   echo "ok|$deposit_amount|$deposit_display|$bond_status|$deposit_denom"
 }
@@ -1318,7 +1341,7 @@ add_miner_deposit() {
   if command -v bc >/dev/null 2>&1; then
     amount_microunes=$(echo "$amount_unes * 1000000" | bc | cut -d. -f1)
   else
-    amount_microunes=$(awk "BEGIN {printf \"%.0f\", $amount_unes * 1000000}")
+    amount_microunes=$(safe_multiply "$amount_unes" 1000000 0)
   fi
 
   # Load private key from config
@@ -1399,7 +1422,7 @@ show_deposit_flow() {
   fi
 
   local shortfall_display
-  shortfall_display=$(awk "BEGIN {printf \"%.6f\", $shortfall_microunes / 1000000}")
+  shortfall_display=$(safe_divide "$shortfall_microunes" 1000000 6)
 
   # Check if miner is not registered - auto-register node and miner
   if [ "$bond_status" = "not_registered" ]; then
@@ -1675,7 +1698,7 @@ a 7-day unbonding period.")"
     if command -v bc >/dev/null 2>&1; then
       deposit_microunes=$(echo "$deposit_amount * 1000000" | bc | cut -d. -f1)
     else
-      deposit_microunes=$(awk "BEGIN {printf \"%.0f\", $deposit_amount * 1000000}")
+      deposit_microunes=$(safe_multiply "$deposit_amount" 1000000 0)
     fi
 
     # Validate amount
@@ -1697,11 +1720,11 @@ a 7-day unbonding period.")"
     # Calculate final deposit
     local final_deposit_microunes=$((current_deposit_microunes + deposit_microunes))
     local final_deposit_display
-    final_deposit_display=$(awk "BEGIN {printf \"%.6f\", $final_deposit_microunes / 1000000}")
+    final_deposit_display=$(safe_divide "$final_deposit_microunes" 1000000 6)
 
     local remaining_balance_microunes=$((balance_microunes - total_needed))
     local remaining_balance_display
-    remaining_balance_display=$(awk "BEGIN {printf \"%.6f\", $remaining_balance_microunes / 1000000}")
+    remaining_balance_display=$(safe_divide "$remaining_balance_microunes" 1000000 6)
 
     local meets_minimum="Below minimum"
     local meets_color=196
@@ -1709,6 +1732,11 @@ a 7-day unbonding period.")"
       meets_minimum="OK"
       meets_color=42
     fi
+
+    # Calculate total cost for display
+    local total_cost_microunes=$((deposit_microunes + gas_fee_microunes))
+    local total_cost_display
+    total_cost_display=$(safe_divide "$total_cost_microunes" 1000000 6)
 
     # Show confirmation
     echo ""
@@ -1720,7 +1748,7 @@ a 7-day unbonding period.")"
   $(gum style --foreground 250 "Deposit Amount:")     ${deposit_amount} UNES
   $(gum style --foreground 250 "Gas Fee:")            ~${gas_fee_display} UNES
   $(gum style --foreground 245 "─────────────────────────────────────────────────────────────────")
-  $(gum style --foreground 43 "Total Cost:")          $(gum style --bold "$(awk "BEGIN {printf \"%.6f\", ($deposit_microunes + $gas_fee_microunes) / 1000000}") UNES")
+  $(gum style --foreground 43 "Total Cost:")          $(gum style --bold "${total_cost_display} UNES")
 
   $(gum style --foreground 245 "─────────────────────────────────────────────────────────────────")
 
@@ -1835,8 +1863,8 @@ check_min_deposit() {
   # Convert to UNES for display (using awk for consistent formatting with leading zeros)
   local miner_min_display
   local orch_min_display
-  miner_min_display=$(awk "BEGIN {printf \"%.6f\", $miner_min_amount / 1000000}")
-  orch_min_display=$(awk "BEGIN {printf \"%.6f\", $orch_min_amount / 1000000}")
+  miner_min_display=$(safe_divide "$miner_min_amount" 1000000 6)
+  orch_min_display=$(safe_divide "$orch_min_amount" 1000000 6)
 
   # Normalize denom for display (unes -> UNES)
   local miner_denom_display="UNES"
