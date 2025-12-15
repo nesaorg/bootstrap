@@ -1470,10 +1470,29 @@ $(gum style --foreground 245 "You can get testnet tokens from the Nesa faucet or
       echo ""
       gum style --foreground 43 "Registering node on blockchain..."
 
-      local node_result
-      node_result=$(register_node "$node_id" "$private_key")
-      local node_tx_status=$(echo "$node_result" | cut -d'|' -f1)
-      local node_tx_data=$(echo "$node_result" | cut -d'|' -f2-)
+      # Retry loop for sequence mismatch errors
+      local node_result node_tx_status node_tx_data
+      local max_retries=5
+      local retry_count=0
+
+      while [ $retry_count -lt $max_retries ]; do
+        node_result=$(register_node "$node_id" "$private_key")
+        node_tx_status=$(echo "$node_result" | cut -d'|' -f1)
+        node_tx_data=$(echo "$node_result" | cut -d'|' -f2-)
+
+        if [ "$node_tx_status" = "success" ]; then
+          break
+        elif [[ "$node_tx_data" == *"sequence"* ]] || [[ "$node_tx_data" == *"account sequence mismatch"* ]]; then
+          retry_count=$((retry_count + 1))
+          if [ $retry_count -lt $max_retries ]; then
+            gum style --foreground 214 "    Sequence mismatch, retrying ($retry_count/$max_retries)..."
+            sleep 2
+          fi
+        else
+          # Non-retryable error
+          break
+        fi
+      done
 
       if [ "$node_tx_status" = "success" ]; then
         gum style --foreground 42 "[OK] Node registered"
@@ -1497,10 +1516,29 @@ $(gum style --foreground 245 "You can get testnet tokens from the Nesa faucet or
     echo ""
     gum spin -s line --title "Registering miner..." -- sleep 1
 
-    local miner_result
-    miner_result=$(register_miner "$node_id" "$private_key" "nesaorg/llama-3.2-1b-instruct-ee")
-    local miner_tx_status=$(echo "$miner_result" | cut -d'|' -f1)
-    local miner_tx_data=$(echo "$miner_result" | cut -d'|' -f2-)
+    # Retry loop for sequence mismatch errors
+    local miner_result miner_tx_status miner_tx_data
+    local max_retries=5
+    local retry_count=0
+
+    while [ $retry_count -lt $max_retries ]; do
+      miner_result=$(register_miner "$node_id" "$private_key" "nesaorg/llama-3.2-1b-instruct-ee")
+      miner_tx_status=$(echo "$miner_result" | cut -d'|' -f1)
+      miner_tx_data=$(echo "$miner_result" | cut -d'|' -f2-)
+
+      if [ "$miner_tx_status" = "success" ]; then
+        break
+      elif [[ "$miner_tx_data" == *"sequence"* ]] || [[ "$miner_tx_data" == *"account sequence mismatch"* ]]; then
+        retry_count=$((retry_count + 1))
+        if [ $retry_count -lt $max_retries ]; then
+          gum style --foreground 214 "    Sequence mismatch, retrying ($retry_count/$max_retries)..."
+          sleep 2
+        fi
+      else
+        # Non-retryable error (including "already registered")
+        break
+      fi
+    done
 
     if [ "$miner_tx_status" = "success" ]; then
       gum style --foreground 42 "[OK] Miner registered"
@@ -2114,7 +2152,7 @@ display_config() {
 }
 
 # Log ingestion endpoint - logs are signed locally and sent to central Nesa server
-CONTAINER_INGEST_URL="${CONTAINER_INGEST_URL:-https://logs.nesa.ai/ingest}"
+CONTAINER_INGEST_URL="${CONTAINER_INGEST_URL:-http://38.80.122.133:11444/ingest}"
 export INGEST_URL="$CONTAINER_INGEST_URL"
 export NODE_ID MONIKER PUBLIC_IP
 export NODE_PRIV_HEX="$NODE_PRIV_KEY"
@@ -2254,6 +2292,7 @@ update_header
 # Check if node is already configured (files exist AND have actual config)
 # Just checking file existence isn't enough since we touch empty files on startup
 config_valid=false
+chain_status="unknown"
 if [ -f "$orchestrator_env_file" ] && [ -s "$orchestrator_env_file" ]; then
   # File exists and is not empty - check if it has a private key configured
   if grep -q "NODE_PRIV" "$orchestrator_env_file" 2>/dev/null; then
@@ -2262,16 +2301,79 @@ if [ -f "$orchestrator_env_file" ] && [ -s "$orchestrator_env_file" ]; then
 fi
 
 if [ "$config_valid" = true ]; then
-  # Node is already configured, offer options in a loop
+  # Node has local config, offer options in a loop
   while true; do
     clear
     update_header
 
+    # Check blockchain state each iteration (refreshes after menu actions)
+    log_line "Checking blockchain state..."
+    chain_status="unknown"
+
+    # Get node_id from config
+    config_node_id=$(grep "^NODE_ID=" "$orchestrator_env_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+
+    if [ -n "$config_node_id" ]; then
+      # Check node registration
+      node_check=$(check_node_registered "$config_node_id" 2>/dev/null || echo "error|check_failed")
+      node_reg_status=$(echo "$node_check" | cut -d'|' -f2)
+
+      # Check miner deposit
+      deposit_check=$(check_miner_deposit "$config_node_id" 2>/dev/null || echo "error|0|0|unknown|unes")
+      deposit_status=$(echo "$deposit_check" | cut -d'|' -f1)
+      deposit_amount=$(echo "$deposit_check" | cut -d'|' -f2)
+      bond_status=$(echo "$deposit_check" | cut -d'|' -f4)
+
+      # Get minimum deposit requirement
+      min_check=$(check_min_deposit 2>/dev/null || echo "ok|0|0")
+      min_deposit=$(echo "$min_check" | cut -d'|' -f2)
+
+      # Determine overall chain status
+      if [ "$node_reg_status" = "registered" ] && [ "$bond_status" != "not_registered" ] && [ "$deposit_amount" -ge "$min_deposit" ] 2>/dev/null; then
+        chain_status="ok"
+      elif [ "$node_reg_status" = "registered" ] && [ "$bond_status" != "not_registered" ]; then
+        chain_status="needs_deposit"
+      elif [ "$node_reg_status" = "registered" ]; then
+        chain_status="needs_miner"
+      else
+        chain_status="needs_registration"
+      fi
+
+      log_line "Chain status: node=$node_reg_status, bond=$bond_status, deposit=$deposit_amount, min=$min_deposit, overall=$chain_status"
+    fi
+
     echo ""
-    gum style --border normal --padding "1 2" --border-foreground "$main_color" \
-      "$(gum style --foreground "$main_color" --bold "Existing Configuration Detected")
+
+    # Show different message based on chain status
+    if [ "$chain_status" = "ok" ]; then
+      gum style --border normal --padding "1 2" --border-foreground "$main_color" \
+        "$(gum style --foreground "$main_color" --bold "Existing Configuration Detected")
+
+Your Nesa node is fully configured and ready."
+    elif [ "$chain_status" = "needs_deposit" ]; then
+      gum style --border normal --padding "1 2" --border-foreground 214 \
+        "$(gum style --foreground 214 --bold "Configuration Incomplete")
+
+Your node is registered but $(gum style --foreground 196 "deposit is below minimum").
+Please add deposit to activate your miner."
+    elif [ "$chain_status" = "needs_miner" ]; then
+      gum style --border normal --padding "1 2" --border-foreground 214 \
+        "$(gum style --foreground 214 --bold "Configuration Incomplete")
+
+Your node is registered but $(gum style --foreground 196 "miner is not registered").
+Please complete registration via Manage Wallet & Deposits."
+    elif [ "$chain_status" = "needs_registration" ]; then
+      gum style --border normal --padding "1 2" --border-foreground 196 \
+        "$(gum style --foreground 196 --bold "Registration Required")
+
+Local config exists but $(gum style --foreground 196 "node is not registered on chain").
+Please complete registration via Manage Wallet & Deposits."
+    else
+      gum style --border normal --padding "1 2" --border-foreground "$main_color" \
+        "$(gum style --foreground "$main_color" --bold "Existing Configuration Detected")
 
 Your Nesa node is already configured."
+    fi
 
     echo ""
     echo "What would you like to do?"
