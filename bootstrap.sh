@@ -2113,7 +2113,8 @@ display_config() {
 
 }
 
-CONTAINER_INGEST_URL="${CONTAINER_INGEST_URL:-http://host.docker.internal:8080/ingest}"
+# Log ingestion endpoint - logs are signed locally and sent to central Nesa server
+CONTAINER_INGEST_URL="${CONTAINER_INGEST_URL:-https://logs.nesa.ai/ingest}"
 export INGEST_URL="$CONTAINER_INGEST_URL"
 export NODE_ID MONIKER PUBLIC_IP
 export NODE_PRIV_HEX="$NODE_PRIV_KEY"
