@@ -1533,6 +1533,7 @@ check_node_registered() {
 
 # Register node on chain (MsgRegisterNode)
 # Returns: success|tx_hash or error|message
+# Includes retry logic for sequence mismatch errors
 register_node() {
   local node_id="$1"
   local private_key="$2"
@@ -1541,17 +1542,21 @@ register_node() {
   local network_address="${5:-127.0.0.1:8080}"
   local vram="${6:-8000000000}"
   local network_rps="${7:-100.0}"
+  local max_retries="${8:-5}"
 
-  log_line "Registering node: node_id=$node_id"
+  log_line "Registering node: node_id=$node_id (max_retries=$max_retries)"
 
   python3 << PYEOF
 import sys
 import json
+import time
+import re
 from dataclasses import dataclass
 import betterproto
 from mospy import Account, Transaction
 from mospy.clients import HTTPClient
 from google.protobuf import any_pb2 as any_pb
+import httpx
 
 # Define MsgRegisterNode
 @dataclass(eq=False, repr=False)
@@ -1566,6 +1571,45 @@ class MsgRegisterNode(betterproto.Message):
     network_rps: float = betterproto.double_field(8)
     using_relay: bool = betterproto.bool_field(9)
 
+def build_and_broadcast_tx(account, msg, lcd_url):
+    """Build and broadcast transaction, returns (success, result_msg)"""
+    # Refresh account data to get latest sequence
+    client = HTTPClient(api=lcd_url)
+    client.load_account_data(account=account)
+
+    # Build transaction
+    tx = Transaction(account=account, gas=200000, chain_id="nesa")
+    tx.set_fee(amount=1000, denom="unes")
+
+    # Pack message into Any and add to transaction
+    msg_any = any_pb.Any()
+    msg_any.value = bytes(msg)
+    msg_any.type_url = "/dht.v1.MsgRegisterNode"
+    tx._tx_body.messages.append(msg_any)
+
+    # Get signed transaction bytes
+    tx_bytes = tx.get_tx_bytes_as_string()
+
+    # Broadcast
+    broadcast_url = f"{lcd_url}/cosmos/tx/v1beta1/txs"
+    payload = {"tx_bytes": tx_bytes, "mode": "BROADCAST_MODE_SYNC"}
+
+    response = httpx.post(broadcast_url, json=payload, timeout=30)
+    result = response.json()
+
+    if "tx_response" in result:
+        tx_response = result["tx_response"]
+        code = tx_response.get("code", 0)
+        if code == 0:
+            txhash = tx_response.get("txhash", "unknown")
+            return True, txhash
+        else:
+            raw_log = tx_response.get("raw_log", "Unknown error")
+            return False, f"code {code}: {raw_log}"
+    else:
+        error_msg = result.get("message", str(result))
+        return False, f"Broadcast failed: {error_msg}"
+
 try:
     private_key = "${private_key}"
     node_id = "${node_id}"
@@ -1574,6 +1618,8 @@ try:
     network_address = "${network_address}"
     vram = int(${vram})
     network_rps = float(${network_rps})
+    max_retries = int(${max_retries})
+    lcd_url = "${LCD_URL}"
 
     # Create account
     account = Account(private_key=private_key, hrp="nesa")
@@ -1592,48 +1638,37 @@ try:
         using_relay=False
     )
 
-    # Connect and load account
-    client = HTTPClient(api="${LCD_URL}")
+    # Initial load to verify account exists
+    client = HTTPClient(api=lcd_url)
     try:
         client.load_account_data(account=account)
     except Exception as load_err:
         print(f"error|Account not found on chain. Please fund your wallet first: {wallet_address}")
         sys.exit(0)
 
-    # Build transaction
-    tx = Transaction(account=account, gas=200000, chain_id="nesa")
-    tx.set_fee(amount=1000, denom="unes")
+    # Retry loop for sequence mismatch
+    last_error = ""
+    for attempt in range(max_retries):
+        success, result = build_and_broadcast_tx(account, msg, lcd_url)
 
-    # Pack message into Any and add to transaction
-    msg_any = any_pb.Any()
-    msg_any.value = bytes(msg)
-    msg_any.type_url = "/dht.v1.MsgRegisterNode"
-    tx._tx_body.messages.append(msg_any)
+        if success:
+            print(f"success|{result}")
+            sys.exit(0)
 
-    # Get signed transaction bytes
-    tx_bytes = tx.get_tx_bytes_as_string()
+        last_error = result
 
-    # Broadcast using httpx for more control
-    import httpx
-    broadcast_url = "${LCD_URL}/cosmos/tx/v1beta1/txs"
-    payload = {"tx_bytes": tx_bytes, "mode": "BROADCAST_MODE_SYNC"}
-
-    with httpx.Client(timeout=30.0) as http_client:
-        response = http_client.post(broadcast_url, json=payload)
-        result = response.json()
-
-    if "tx_response" in result:
-        tx_response = result["tx_response"]
-        code = tx_response.get("code", 0)
-        if code == 0:
-            txhash = tx_response.get("txhash", "unknown")
-            print(f"success|{txhash}")
+        # Check if it's a sequence mismatch error
+        if "sequence mismatch" in result.lower() or "incorrect account sequence" in result.lower():
+            match = re.search(r'expected (\d+)', result)
+            if match:
+                account.next_sequence = int(match.group(1))
+            wait_time = 0.5 * (attempt + 1)
+            time.sleep(wait_time)
+            continue
         else:
-            raw_log = tx_response.get("raw_log", "Unknown error")
-            print(f"error|{raw_log}")
-    else:
-        error_msg = result.get("message", str(result))
-        print(f"error|Broadcast failed: {error_msg}")
+            break
+
+    print(f"error|Transaction failed after {max_retries} attempts: {last_error}")
 
 except Exception as e:
     print(f"error|{str(e)}")
@@ -1642,16 +1677,20 @@ PYEOF
 
 # Register miner on chain (MsgRegisterMiner)
 # Returns: success|tx_hash or error|message
+# Includes retry logic for sequence mismatch errors
 register_miner() {
   local node_id="$1"
   local private_key="$2"
   local model_name="${3:-nesaorg/llama-3.2-1b-instruct-ee}"
+  local max_retries="${4:-5}"
 
-  log_line "Registering miner: node_id=$node_id model=$model_name"
+  log_line "Registering miner: node_id=$node_id model=$model_name (max_retries=$max_retries)"
 
   python3 << PYEOF
 import sys
 import json
+import time
+import re
 from dataclasses import dataclass
 from typing import List
 import betterproto
@@ -1674,10 +1713,51 @@ class MsgRegisterMiner(betterproto.Message):
     inference_rps: float = betterproto.double_field(9)
     model_name: str = betterproto.string_field(10)
 
+def build_and_broadcast_tx(account, msg, lcd_url):
+    """Build and broadcast transaction, returns (success, result_msg)"""
+    # Refresh account data to get latest sequence
+    client = HTTPClient(api=lcd_url)
+    client.load_account_data(account=account)
+
+    # Build transaction
+    tx = Transaction(account=account, gas=200000, chain_id="nesa")
+    tx.set_fee(amount=1000, denom="unes")
+
+    # Pack message into Any and add to transaction
+    msg_any = any_pb.Any()
+    msg_any.value = bytes(msg)
+    msg_any.type_url = "/dht.v1.MsgRegisterMiner"
+    tx._tx_body.messages.append(msg_any)
+
+    # Get signed transaction bytes
+    tx_bytes = tx.get_tx_bytes_as_string()
+
+    # Broadcast
+    broadcast_url = f"{lcd_url}/cosmos/tx/v1beta1/txs"
+    payload = {"tx_bytes": tx_bytes, "mode": "BROADCAST_MODE_SYNC"}
+
+    response = httpx.post(broadcast_url, json=payload, timeout=30)
+    result = response.json()
+
+    if "tx_response" in result:
+        tx_response = result["tx_response"]
+        code = tx_response.get("code", 0)
+        if code == 0:
+            txhash = tx_response.get("txhash", "unknown")
+            return True, txhash
+        else:
+            raw_log = tx_response.get("raw_log", "Unknown error")
+            return False, f"code {code}: {raw_log}"
+    else:
+        error_msg = result.get("message", str(result))
+        return False, f"Broadcast failed: {error_msg}"
+
 try:
     private_key = "${private_key}"
     node_id = "${node_id}"
     model_name = "${model_name}"
+    max_retries = int(${max_retries})
+    lcd_url = "${LCD_URL}"
 
     # Create account
     account = Account(private_key=private_key, hrp="nesa")
@@ -1697,47 +1777,37 @@ try:
         model_name=model_name
     )
 
-    # Connect and load account
-    client = HTTPClient(api="${LCD_URL}")
+    # Initial load to verify account exists
+    client = HTTPClient(api=lcd_url)
     try:
         client.load_account_data(account=account)
     except Exception as load_err:
         print(f"error|Account not found on chain. Please fund your wallet first: {wallet_address}")
         sys.exit(0)
 
-    # Build transaction
-    tx = Transaction(account=account, gas=200000, chain_id="nesa")
-    tx.set_fee(amount=1000, denom="unes")
+    # Retry loop for sequence mismatch
+    last_error = ""
+    for attempt in range(max_retries):
+        success, result = build_and_broadcast_tx(account, msg, lcd_url)
 
-    # Pack message into Any and add to transaction
-    msg_any = any_pb.Any()
-    msg_any.value = bytes(msg)
-    msg_any.type_url = "/dht.v1.MsgRegisterMiner"
-    tx._tx_body.messages.append(msg_any)
+        if success:
+            print(f"success|{result}")
+            sys.exit(0)
 
-    # Get signed transaction bytes
-    tx_bytes = tx.get_tx_bytes_as_string()
+        last_error = result
 
-    # Broadcast using httpx
-    broadcast_url = "${LCD_URL}/cosmos/tx/v1beta1/txs"
-    payload = {"tx_bytes": tx_bytes, "mode": "BROADCAST_MODE_SYNC"}
-
-    with httpx.Client(timeout=30.0) as http_client:
-        response = http_client.post(broadcast_url, json=payload)
-        result = response.json()
-
-    if "tx_response" in result:
-        tx_response = result["tx_response"]
-        code = tx_response.get("code", 0)
-        if code == 0:
-            txhash = tx_response.get("txhash", "unknown")
-            print(f"success|{txhash}")
+        # Check if it's a sequence mismatch error
+        if "sequence mismatch" in result.lower() or "incorrect account sequence" in result.lower():
+            match = re.search(r'expected (\d+)', result)
+            if match:
+                account.next_sequence = int(match.group(1))
+            wait_time = 0.5 * (attempt + 1)
+            time.sleep(wait_time)
+            continue
         else:
-            raw_log = tx_response.get("raw_log", "Unknown error")
-            print(f"error|{raw_log}")
-    else:
-        error_msg = result.get("message", str(result))
-        print(f"error|Broadcast failed: {error_msg}")
+            break
+
+    print(f"error|Transaction failed after {max_retries} attempts: {last_error}")
 
 except Exception as e:
     print(f"error|{str(e)}")
@@ -1746,16 +1816,20 @@ PYEOF
 
 # Submit miner deposit transaction
 # Returns: success|tx_hash or error|message
+# Includes retry logic for sequence mismatch errors
 submit_miner_deposit() {
   local node_id="$1"
   local amount_microunes="$2"
   local private_key="$3"
+  local max_retries="${4:-5}"
 
-  log_line "Submitting miner deposit: node_id=$node_id, amount=${amount_microunes}unes"
+  log_line "Submitting miner deposit: node_id=$node_id, amount=${amount_microunes}unes (max_retries=$max_retries)"
 
   python3 << PYEOF
 import sys
 import json
+import time
+import re
 from dataclasses import dataclass
 import betterproto
 from mospy import Account, Transaction
@@ -1776,30 +1850,11 @@ class MsgAddMinerDeposit(betterproto.Message):
     node_id: str = betterproto.string_field(2)
     amount: Coin = betterproto.message_field(3)
 
-try:
-    private_key = "${private_key}"
-    node_id = "${node_id}"
-    amount_microunes = "${amount_microunes}"
-
-    # Create account from private key
-    account = Account(
-        private_key=private_key,
-        hrp="nesa",
-    )
-
-    # Load account data from chain
-    client = HTTPClient(api="${LCD_URL}")
-    try:
-        client.load_account_data(account=account)
-    except Exception as load_err:
-        # Account might not exist yet (no funds received)
-        print(f"error|Account not found on chain. Please fund your wallet first: {account.address}")
-        sys.exit(0)
-
-    # Check if account has sequence (exists on chain)
-    if account.next_sequence is None:
-        print(f"error|Account not initialized on chain. Send funds to {account.address} first.")
-        sys.exit(0)
+def build_and_broadcast_tx(account, node_id, amount_microunes, lcd_url):
+    """Build and broadcast transaction, returns (success, result_msg)"""
+    # Refresh account data to get latest sequence
+    client = HTTPClient(api=lcd_url)
+    client.load_account_data(account=account)
 
     # Create transaction
     tx = Transaction(
@@ -1826,7 +1881,7 @@ try:
     tx_bytes = tx.get_tx_bytes_as_string()
 
     # Broadcast transaction
-    broadcast_url = "${LCD_URL}/cosmos/tx/v1beta1/txs"
+    broadcast_url = f"{lcd_url}/cosmos/tx/v1beta1/txs"
     broadcast_payload = {
         "tx_bytes": tx_bytes,
         "mode": "BROADCAST_MODE_SYNC"
@@ -1841,13 +1896,67 @@ try:
         code = tx_response.get("code", 0)
         if code == 0:
             tx_hash = tx_response.get("txhash", "")
-            print(f"success|{tx_hash}")
+            return True, tx_hash
         else:
             raw_log = tx_response.get("raw_log", "Unknown error")
-            print(f"error|Transaction failed (code {code}): {raw_log}")
+            return False, f"code {code}: {raw_log}"
     else:
         error_msg = result.get("message", str(result))
-        print(f"error|Broadcast failed: {error_msg}")
+        return False, f"Broadcast failed: {error_msg}"
+
+try:
+    private_key = "${private_key}"
+    node_id = "${node_id}"
+    amount_microunes = "${amount_microunes}"
+    max_retries = int(${max_retries})
+    lcd_url = "${LCD_URL}"
+
+    # Create account from private key
+    account = Account(
+        private_key=private_key,
+        hrp="nesa",
+    )
+
+    # Initial load to verify account exists
+    client = HTTPClient(api=lcd_url)
+    try:
+        client.load_account_data(account=account)
+    except Exception as load_err:
+        print(f"error|Account not found on chain. Please fund your wallet first: {account.address}")
+        sys.exit(0)
+
+    if account.next_sequence is None:
+        print(f"error|Account not initialized on chain. Send funds to {account.address} first.")
+        sys.exit(0)
+
+    # Retry loop for sequence mismatch
+    last_error = ""
+    for attempt in range(max_retries):
+        success, result = build_and_broadcast_tx(account, node_id, amount_microunes, lcd_url)
+
+        if success:
+            print(f"success|{result}")
+            sys.exit(0)
+
+        last_error = result
+
+        # Check if it's a sequence mismatch error
+        if "sequence mismatch" in result.lower() or "incorrect account sequence" in result.lower():
+            # Extract expected sequence if possible
+            match = re.search(r'expected (\d+)', result)
+            if match:
+                expected_seq = int(match.group(1))
+                account.next_sequence = expected_seq
+
+            # Wait a bit before retry (increasing delay)
+            wait_time = 0.5 * (attempt + 1)
+            time.sleep(wait_time)
+            continue
+        else:
+            # Non-retryable error
+            break
+
+    print(f"error|Transaction failed after {max_retries} attempts: {last_error}")
 
 except Exception as e:
     print(f"error|{str(e)}")
@@ -2288,8 +2397,8 @@ a 7-day unbonding period.")"
     if [ "$deposit_meets_minimum" = true ]; then
       confirm=$(gum choose --cursor.foreground 42 "Submit Deposit" "Change Amount" "Cancel")
     else
-      # No skip option - deposit is required
-      confirm=$(gum choose --cursor.foreground 42 "Submit Deposit" "Change Amount")
+      # Deposit is required, but allow back to menu to fund wallet first
+      confirm=$(gum choose --cursor.foreground 42 "Submit Deposit" "Change Amount" "Back to Main Menu")
     fi
 
     case "$confirm" in
@@ -2338,8 +2447,28 @@ a 7-day unbonding period.")"
 
   Please try again or check your wallet balance."
           echo ""
-          sleep 3
-          continue
+
+          # Offer menu after failure
+          local fail_choice
+          fail_choice=$(gum choose --cursor.foreground 42 \
+            "Try again" \
+            "Change amount" \
+            "Back to main menu")
+
+          case "$fail_choice" in
+            "Try again")
+              continue
+              ;;
+            "Change amount")
+              continue
+              ;;
+            "Back to main menu")
+              return 1
+              ;;
+            *)
+              continue
+              ;;
+          esac
         fi
         ;;
       "Change Amount")
@@ -2348,6 +2477,10 @@ a 7-day unbonding period.")"
       "Cancel")
         # Only available when deposit already meets minimum
         return 0
+        ;;
+      "Back to Main Menu")
+        # Allow user to go back and fund wallet or do other things first
+        return 1
         ;;
       *)
         # Empty selection or escape - loop back
@@ -2774,6 +2907,253 @@ compose_up() {
   echo "Docker Compose started successfully! (${gpu_mode})"
 }
 
+# Get container status with color coding
+get_container_status() {
+  local container_name="$1"
+  local status health uptime
+
+  # Check if container exists
+  if ! docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${container_name}$"; then
+    echo "not_found|Not Found|—|—"
+    return
+  fi
+
+  # Get status
+  status=$(docker inspect --format '{{.State.Status}}' "$container_name" 2>/dev/null || echo "unknown")
+
+  # Get health if available
+  health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}no healthcheck{{end}}' "$container_name" 2>/dev/null || echo "unknown")
+
+  # Get uptime
+  if [ "$status" = "running" ]; then
+    local started_at
+    started_at=$(docker inspect --format '{{.State.StartedAt}}' "$container_name" 2>/dev/null)
+    if [ -n "$started_at" ]; then
+      # Calculate uptime in human-readable format
+      local start_epoch now_epoch diff_seconds
+      if [ "$OS_TYPE" = "Darwin" ]; then
+        start_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%S" "${started_at%%.*}" "+%s" 2>/dev/null || echo "0")
+      else
+        start_epoch=$(date -d "${started_at}" "+%s" 2>/dev/null || echo "0")
+      fi
+      now_epoch=$(date "+%s")
+      diff_seconds=$((now_epoch - start_epoch))
+
+      if [ "$diff_seconds" -lt 60 ]; then
+        uptime="${diff_seconds}s"
+      elif [ "$diff_seconds" -lt 3600 ]; then
+        uptime="$((diff_seconds / 60))m $((diff_seconds % 60))s"
+      elif [ "$diff_seconds" -lt 86400 ]; then
+        uptime="$((diff_seconds / 3600))h $((diff_seconds % 3600 / 60))m"
+      else
+        uptime="$((diff_seconds / 86400))d $((diff_seconds % 86400 / 3600))h"
+      fi
+    else
+      uptime="—"
+    fi
+  else
+    uptime="—"
+  fi
+
+  echo "${status}|${health}|${uptime}"
+}
+
+# Show node status dashboard
+show_node_status() {
+  clear
+  update_header
+
+  echo ""
+  gum style --bold --foreground "$main_color" "NODE STATUS"
+  echo ""
+
+  # Get status for each container
+  local orch_status orch_health orch_uptime
+  local wt_status wt_health wt_uptime
+
+  IFS='|' read -r orch_status orch_health orch_uptime <<< "$(get_container_status "orchestrator")"
+  IFS='|' read -r wt_status wt_health wt_uptime <<< "$(get_container_status "watchtower")"
+
+  # Color coding for status
+  local orch_status_color wt_status_color
+  case "$orch_status" in
+    "running") orch_status_color=42 ;;  # green
+    "exited"|"dead") orch_status_color=196 ;;  # red
+    "restarting") orch_status_color=214 ;;  # yellow
+    *) orch_status_color=245 ;;  # gray
+  esac
+
+  case "$wt_status" in
+    "running") wt_status_color=42 ;;
+    "exited"|"dead") wt_status_color=196 ;;
+    "restarting") wt_status_color=214 ;;
+    *) wt_status_color=245 ;;
+  esac
+
+  # Overall status
+  local overall_status overall_color overall_msg
+  if [ "$orch_status" = "running" ]; then
+    overall_status="HEALTHY"
+    overall_color=42
+    overall_msg="Your node is running properly"
+  elif [ "$orch_status" = "restarting" ]; then
+    overall_status="RESTARTING"
+    overall_color=214
+    overall_msg="Orchestrator is restarting, please wait..."
+  elif [ "$orch_status" = "not_found" ]; then
+    overall_status="NOT STARTED"
+    overall_color=245
+    overall_msg="Node containers have not been started yet"
+  else
+    overall_status="UNHEALTHY"
+    overall_color=196
+    overall_msg="Orchestrator is not running - check logs for errors"
+  fi
+
+  # Display status box
+  gum style --border rounded --padding "1 2" --border-foreground "$overall_color" \
+    "$(gum style --foreground "$overall_color" --bold "$overall_status")
+
+$overall_msg"
+
+  echo ""
+
+  # Container table
+  gum style --foreground 245 "─────────────────────────────────────────────────────────────────"
+  printf "  %-20s %-12s %-15s %-12s\n" "CONTAINER" "STATUS" "HEALTH" "UPTIME"
+  gum style --foreground 245 "─────────────────────────────────────────────────────────────────"
+
+  # Orchestrator row
+  printf "  %-20s " "orchestrator"
+  gum style --foreground "$orch_status_color" --inline "$orch_status"
+  printf "%-$((12 - ${#orch_status}))s" ""
+  printf "%-15s %-12s\n" "$orch_health" "$orch_uptime"
+
+  # Watchtower row
+  printf "  %-20s " "watchtower"
+  gum style --foreground "$wt_status_color" --inline "$wt_status"
+  printf "%-$((12 - ${#wt_status}))s" ""
+  printf "%-15s %-12s\n" "$wt_health" "$wt_uptime"
+
+  gum style --foreground 245 "─────────────────────────────────────────────────────────────────"
+
+  # Show recent errors if orchestrator is not healthy
+  if [ "$orch_status" != "running" ] && [ "$orch_status" != "not_found" ]; then
+    echo ""
+    gum style --foreground 196 --bold "Recent Errors:"
+    docker logs orchestrator --tail 10 2>&1 | while read -r line; do
+      gum style --foreground 245 "  $line"
+    done
+  fi
+
+  echo ""
+}
+
+# Stream orchestrator logs with ability to exit
+stream_logs() {
+  local container="${1:-orchestrator}"
+  local tail_lines="${2:-50}"
+
+  clear
+  update_header
+
+  echo ""
+  gum style --bold --foreground "$main_color" "LIVE LOGS: $container"
+  gum style --foreground 245 "Press Ctrl+C to stop and return to menu"
+  echo ""
+  gum style --foreground 245 "─────────────────────────────────────────────────────────────────"
+  echo ""
+
+  # Check if container exists
+  if ! docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${container}$"; then
+    gum style --foreground 196 "Container '$container' not found. Start your node first."
+    echo ""
+    read -r -s -p "Press Enter to continue..." && echo
+    return
+  fi
+
+  # Stream logs with trap to handle Ctrl+C gracefully
+  trap 'echo ""; gum style --foreground 245 "Stopped log streaming."; sleep 1; return 0' INT
+
+  docker logs -f --tail "$tail_lines" "$container" 2>&1
+
+  trap - INT
+}
+
+# Show status and logs menu
+show_status_and_logs_menu() {
+  while true; do
+    show_node_status
+
+    local choice
+    choice=$(gum choose \
+      --cursor.foreground "$main_color" \
+      --item.foreground "$link_color" \
+      "Refresh Status" \
+      "View Live Logs (orchestrator)" \
+      "View Last 100 Lines" \
+      "View Watchtower Logs" \
+      "Back to Main Menu")
+
+    case "$choice" in
+      "Refresh Status")
+        # Just loop to refresh
+        continue
+        ;;
+      "View Live Logs (orchestrator)")
+        stream_logs "orchestrator" 50
+        ;;
+      "View Last 100 Lines")
+        clear
+        update_header
+        echo ""
+        gum style --bold --foreground "$main_color" "LAST 100 LOG LINES"
+        echo ""
+        gum style --foreground 245 "─────────────────────────────────────────────────────────────────"
+        echo ""
+
+        if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^orchestrator$"; then
+          docker logs orchestrator --tail 100 2>&1 | while IFS= read -r line; do
+            echo "$line"
+          done
+        else
+          gum style --foreground 196 "Container 'orchestrator' not found."
+        fi
+
+        echo ""
+        gum style --foreground 245 "─────────────────────────────────────────────────────────────────"
+        echo ""
+        read -r -s -p "Press Enter to continue..." && echo
+        ;;
+      "View Watchtower Logs")
+        clear
+        update_header
+        echo ""
+        gum style --bold --foreground "$main_color" "WATCHTOWER LOGS (Last 50 lines)"
+        echo ""
+        gum style --foreground 245 "─────────────────────────────────────────────────────────────────"
+        echo ""
+
+        if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^watchtower$"; then
+          docker logs watchtower --tail 50 2>&1 | while IFS= read -r line; do
+            echo "$line"
+          done
+        else
+          gum style --foreground 196 "Container 'watchtower' not found."
+        fi
+
+        echo ""
+        gum style --foreground 245 "─────────────────────────────────────────────────────────────────"
+        echo ""
+        read -r -s -p "Press Enter to continue..." && echo
+        ;;
+      "Back to Main Menu"|"")
+        return 0
+        ;;
+    esac
+  done
+}
+
 load_node_id() {
   if [[ -f "$node_id_file" ]]; then
     # Read the value from the file into an environment variable
@@ -2957,12 +3337,17 @@ Your Nesa node is already configured."
     existing_choice=$(gum choose \
       --cursor.foreground "$main_color" \
       --item.foreground "$link_color" \
+      "Node Status & Logs" \
       "Manage Wallet & Deposits" \
       "Start/Restart Node" \
       "Reconfigure Node (Run Wizard Again)" \
       "Exit")
 
     case "$existing_choice" in
+      "Node Status & Logs")
+        show_status_and_logs_menu
+        # Loop back to main menu
+        ;;
       "Manage Wallet & Deposits")
         show_management_menu
         # Loop back to main menu
@@ -3048,7 +3433,13 @@ if [ "$prompt_for_node_pk" -eq 1 ]; then
     --cursor.foreground "$main_color" \
     --header "How would you like to set up your wallet?" \
     "Enter existing private key" \
-    "Generate new wallet")
+    "Generate new wallet" \
+    "Back to Main Menu")
+
+  if [ -z "$wallet_choice" ] || [ "$wallet_choice" = "Back to Main Menu" ]; then
+    # Restart script to return to main menu
+    exec "$SCRIPT_PATH"
+  fi
 
   if [ "$wallet_choice" = "Generate new wallet" ]; then
     # Generate new wallet
@@ -3221,13 +3612,28 @@ compose_up
 cd "$init_pwd" || return
 echo -e "Congratulations! Your $(gum style --foreground "$main_color" "nesa") node was successfully bootstrapped!"
 
-# Offer management menu
+# Offer post-setup options
 echo ""
-if gum confirm "Would you like to manage your wallet balance and miner deposit now?"; then
-  show_management_menu
-fi
+echo "What would you like to do next?"
+echo ""
+
+post_setup_choice=$(gum choose \
+  --cursor.foreground "$main_color" \
+  --item.foreground "$link_color" \
+  "View Node Status & Logs" \
+  "Manage Wallet & Deposits" \
+  "Exit")
+
+case "$post_setup_choice" in
+  "View Node Status & Logs")
+    show_status_and_logs_menu
+    ;;
+  "Manage Wallet & Deposits")
+    show_management_menu
+    ;;
+esac
 
 echo ""
-echo "You can run this script again anytime to manage your deposits and check balances."
+echo "You can run this script again anytime to manage your node, check status, and view logs."
 echo ""
 # set +x
