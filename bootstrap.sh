@@ -746,7 +746,49 @@ orchestrator_env_file="$env_dir/orchestrator.env"
 base_env_file="$env_dir/base.env"
 config_env_file="$env_dir/.env"
 init_pwd=$PWD    # so they can get back to where they started!
-status="booting" # lol not really doing anything with this currently
+# Get dynamic node status based on container state
+get_node_status() {
+  # Check if docker is available
+  if ! command -v docker &>/dev/null; then
+    echo "no docker"
+    return
+  fi
+
+  # Try to find orchestrator container
+  local container
+  container=$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E "^orchestrator$" | head -1)
+
+  if [ -z "$container" ]; then
+    echo "not started"
+    return
+  fi
+
+  local state
+  state=$(docker inspect --format '{{.State.Status}}' "$container" 2>/dev/null)
+
+  case "$state" in
+    "running")
+      echo "running"
+      ;;
+    "restarting")
+      echo "restarting"
+      ;;
+    "paused")
+      echo "paused"
+      ;;
+    "exited")
+      echo "stopped"
+      ;;
+    "dead")
+      echo "error"
+      ;;
+    *)
+      echo "unknown"
+      ;;
+  esac
+}
+
+status="booting" # will be updated dynamically
 ORC_PORT=31333
 
 MONIKER=${MONIKER:-$(hostname -s)}
@@ -773,6 +815,9 @@ update_header() {
   local op_dashboard_url
   local public_key
   local header
+
+  # Get dynamic status from container state
+  status=$(get_node_status)
 
   # Re-read terminal size in case it changed
   terminal_size=$(stty size 2>/dev/null || echo "24 80")
@@ -2907,27 +2952,61 @@ compose_up() {
   echo "Docker Compose started successfully! (${gpu_mode})"
 }
 
+# Find actual container name (handles both explicit names and compose-generated names)
+find_container() {
+  local container_name="$1"
+
+  # Try exact name first
+  if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${container_name}$"; then
+    echo "$container_name"
+    return 0
+  fi
+
+  # Try to find compose-generated name (e.g., docker-watchtower-1, docker_watchtower_1)
+  local found
+  found=$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E "(^|[-_])${container_name}([-_]|$)" | head -1)
+  if [ -n "$found" ]; then
+    echo "$found"
+    return 0
+  fi
+
+  return 1
+}
+
 # Get container status with color coding
 get_container_status() {
   local container_name="$1"
   local status health uptime
+  local actual_container
 
-  # Check if container exists
-  if ! docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${container_name}$"; then
-    echo "not_found|Not Found|—|—"
+  actual_container=$(find_container "$container_name")
+  if [ -z "$actual_container" ]; then
+    echo "not_found|—|—"
     return
   fi
 
   # Get status
-  status=$(docker inspect --format '{{.State.Status}}' "$container_name" 2>/dev/null || echo "unknown")
+  status=$(docker inspect --format '{{.State.Status}}' "$actual_container" 2>/dev/null || echo "unknown")
 
-  # Get health if available
-  health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}no healthcheck{{end}}' "$container_name" 2>/dev/null || echo "unknown")
+  # Get health if available - show "ok" for running containers without healthcheck
+  local raw_health
+  raw_health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$actual_container" 2>/dev/null || echo "unknown")
+
+  if [ "$raw_health" = "none" ]; then
+    # No healthcheck defined - show status based on container state
+    if [ "$status" = "running" ]; then
+      health="ok"
+    else
+      health="—"
+    fi
+  else
+    health="$raw_health"
+  fi
 
   # Get uptime
   if [ "$status" = "running" ]; then
     local started_at
-    started_at=$(docker inspect --format '{{.State.StartedAt}}' "$container_name" 2>/dev/null)
+    started_at=$(docker inspect --format '{{.State.StartedAt}}' "$actual_container" 2>/dev/null)
     if [ -n "$started_at" ]; then
       # Calculate uptime in human-readable format
       local start_epoch now_epoch diff_seconds
@@ -3018,32 +3097,52 @@ $overall_msg"
 
   echo ""
 
-  # Container table
-  gum style --foreground 245 "─────────────────────────────────────────────────────────────────"
+  # Container table using ANSI colors (gum style --inline not available in all versions)
+  # Color codes: 32=green, 31=red, 33=yellow, 90=gray
+  local color_reset="\033[0m"
+  local color_green="\033[32m"
+  local color_red="\033[31m"
+  local color_yellow="\033[33m"
+  local color_gray="\033[90m"
+
+  # Map status colors to ANSI
+  local orch_ansi wt_ansi
+  case "$orch_status_color" in
+    42) orch_ansi="$color_green" ;;
+    196) orch_ansi="$color_red" ;;
+    214) orch_ansi="$color_yellow" ;;
+    *) orch_ansi="$color_gray" ;;
+  esac
+  case "$wt_status_color" in
+    42) wt_ansi="$color_green" ;;
+    196) wt_ansi="$color_red" ;;
+    214) wt_ansi="$color_yellow" ;;
+    *) wt_ansi="$color_gray" ;;
+  esac
+
+  echo -e "${color_gray}─────────────────────────────────────────────────────────────────${color_reset}"
   printf "  %-20s %-12s %-15s %-12s\n" "CONTAINER" "STATUS" "HEALTH" "UPTIME"
-  gum style --foreground 245 "─────────────────────────────────────────────────────────────────"
+  echo -e "${color_gray}─────────────────────────────────────────────────────────────────${color_reset}"
 
   # Orchestrator row
-  printf "  %-20s " "orchestrator"
-  gum style --foreground "$orch_status_color" --inline "$orch_status"
-  printf "%-$((12 - ${#orch_status}))s" ""
-  printf "%-15s %-12s\n" "$orch_health" "$orch_uptime"
+  printf "  %-20s ${orch_ansi}%-12s${color_reset} %-15s %-12s\n" "orchestrator" "$orch_status" "$orch_health" "$orch_uptime"
 
   # Watchtower row
-  printf "  %-20s " "watchtower"
-  gum style --foreground "$wt_status_color" --inline "$wt_status"
-  printf "%-$((12 - ${#wt_status}))s" ""
-  printf "%-15s %-12s\n" "$wt_health" "$wt_uptime"
+  printf "  %-20s ${wt_ansi}%-12s${color_reset} %-15s %-12s\n" "watchtower" "$wt_status" "$wt_health" "$wt_uptime"
 
-  gum style --foreground 245 "─────────────────────────────────────────────────────────────────"
+  echo -e "${color_gray}─────────────────────────────────────────────────────────────────${color_reset}"
 
   # Show recent errors if orchestrator is not healthy
   if [ "$orch_status" != "running" ] && [ "$orch_status" != "not_found" ]; then
     echo ""
     gum style --foreground 196 --bold "Recent Errors:"
-    docker logs orchestrator --tail 10 2>&1 | while read -r line; do
-      gum style --foreground 245 "  $line"
-    done
+    local err_container
+    err_container=$(find_container "orchestrator")
+    if [ -n "$err_container" ]; then
+      docker logs "$err_container" --tail 10 2>&1 | while read -r line; do
+        echo "  $line"
+      done
+    fi
   fi
 
   echo ""
@@ -3064,8 +3163,10 @@ stream_logs() {
   gum style --foreground 245 "─────────────────────────────────────────────────────────────────"
   echo ""
 
-  # Check if container exists
-  if ! docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${container}$"; then
+  # Find actual container name
+  local actual_container
+  actual_container=$(find_container "$container")
+  if [ -z "$actual_container" ]; then
     gum style --foreground 196 "Container '$container' not found. Start your node first."
     echo ""
     read -r -s -p "Press Enter to continue..." && echo
@@ -3075,7 +3176,7 @@ stream_logs() {
   # Stream logs with trap to handle Ctrl+C gracefully
   trap 'echo ""; gum style --foreground 245 "Stopped log streaming."; sleep 1; return 0' INT
 
-  docker logs -f --tail "$tail_lines" "$container" 2>&1
+  docker logs -f --tail "$tail_lines" "$actual_container" 2>&1
 
   trap - INT
 }
@@ -3112,8 +3213,10 @@ show_status_and_logs_menu() {
         gum style --foreground 245 "─────────────────────────────────────────────────────────────────"
         echo ""
 
-        if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^orchestrator$"; then
-          docker logs orchestrator --tail 100 2>&1 | while IFS= read -r line; do
+        local orch_container
+        orch_container=$(find_container "orchestrator")
+        if [ -n "$orch_container" ]; then
+          docker logs "$orch_container" --tail 100 2>&1 | while IFS= read -r line; do
             echo "$line"
           done
         else
@@ -3134,8 +3237,10 @@ show_status_and_logs_menu() {
         gum style --foreground 245 "─────────────────────────────────────────────────────────────────"
         echo ""
 
-        if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^watchtower$"; then
-          docker logs watchtower --tail 50 2>&1 | while IFS= read -r line; do
+        local wt_container
+        wt_container=$(find_container "watchtower")
+        if [ -n "$wt_container" ]; then
+          docker logs "$wt_container" --tail 50 2>&1 | while IFS= read -r line; do
             echo "$line"
           done
         else
@@ -3340,7 +3445,7 @@ Your Nesa node is already configured."
       "Node Status & Logs" \
       "Manage Wallet & Deposits" \
       "Start/Restart Node" \
-      "Reconfigure Node (Run Wizard Again)" \
+      "Reconfigure Node" \
       "Exit")
 
     case "$existing_choice" in
@@ -3368,7 +3473,7 @@ Your Nesa node is already configured."
         read -r -s -p "Press Enter to continue..." && echo
         # Loop back to main menu
         ;;
-      "Reconfigure Node (Run Wizard Again)")
+      "Reconfigure Node")
         echo "Proceeding to reconfiguration wizard..."
         sleep 1
         break  # Exit loop to continue to wizard
