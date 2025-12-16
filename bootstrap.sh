@@ -667,71 +667,93 @@ check_python_and_ecdsa() {
     exit 1
   fi
 
+  # Virtual environment path for isolated Python packages
+  local NESA_VENV="${DEFAULT_WORKDIR}/venv"
+  local PYTHON_CMD="python3"
+  local PIP_CMD=""
+
+  # Check if we have an existing venv, activate it
+  if [ -f "${NESA_VENV}/bin/activate" ]; then
+    # shellcheck disable=SC1091
+    source "${NESA_VENV}/bin/activate" 2>/dev/null || true
+    PYTHON_CMD="${NESA_VENV}/bin/python3"
+    PIP_CMD="${NESA_VENV}/bin/pip"
+  fi
+
   # Check and install required Python libraries
   local missing_libs=()
 
-  python3 -c "import ecdsa" 2>/dev/null || missing_libs+=("ecdsa")
-  python3 -c "import base58" 2>/dev/null || missing_libs+=("base58")
-  python3 -c "from cryptography.hazmat.primitives.asymmetric import ed25519" 2>/dev/null || missing_libs+=("cryptography")
-  python3 -c "import mospy" 2>/dev/null || missing_libs+=("mospy-wallet")
-  python3 -c "import httpx" 2>/dev/null || missing_libs+=("httpx")
-  python3 -c "import betterproto" 2>/dev/null || missing_libs+=("betterproto")
+  $PYTHON_CMD -c "import ecdsa" 2>/dev/null || missing_libs+=("ecdsa")
+  $PYTHON_CMD -c "import base58" 2>/dev/null || missing_libs+=("base58")
+  $PYTHON_CMD -c "from cryptography.hazmat.primitives.asymmetric import ed25519" 2>/dev/null || missing_libs+=("cryptography")
+  $PYTHON_CMD -c "import mospy" 2>/dev/null || missing_libs+=("mospy-wallet")
+  $PYTHON_CMD -c "import httpx" 2>/dev/null || missing_libs+=("httpx")
+  $PYTHON_CMD -c "import betterproto" 2>/dev/null || missing_libs+=("betterproto")
 
   if [ ${#missing_libs[@]} -gt 0 ]; then
     echo "Installing required Python libraries: ${missing_libs[*]}..."
 
-    # PEP 668 (Python 3.12+) requires --break-system-packages for system pip
-    # We use --user to install to user directory, which is safe
-    local pip_args="--user --break-system-packages"
+    local install_success=false
 
-    # Try multiple pip installation methods
-    if command_exists pip3; then
-      pip3 install $pip_args "${missing_libs[@]}" 2>/dev/null || \
-      pip3 install --user "${missing_libs[@]}" 2>/dev/null || \
-      pip3 install "${missing_libs[@]}" 2>/dev/null || \
-      python3 -m pip install $pip_args "${missing_libs[@]}" 2>/dev/null || \
-      python3 -m pip install --user "${missing_libs[@]}" 2>/dev/null || \
-      python3 -m pip install "${missing_libs[@]}" 2>/dev/null || {
-        echo ""
-        echo "=========================================="
-        echo "ERROR: Failed to install Python libraries"
-        echo "=========================================="
-        echo "Please install manually:"
-        echo "  pip3 install --user ${missing_libs[*]}"
-        echo ""
-        echo "On Ubuntu 24.04+, you may need:"
-        echo "  pip3 install --user --break-system-packages ${missing_libs[*]}"
-        echo "=========================================="
-        exit 1
-      }
-    else
-      # pip3 command doesn't exist, try python3 -m pip
-      python3 -m pip install $pip_args "${missing_libs[@]}" 2>/dev/null || \
-      python3 -m pip install --user "${missing_libs[@]}" 2>/dev/null || \
-      python3 -m pip install "${missing_libs[@]}" 2>/dev/null || {
-        echo ""
-        echo "=========================================="
-        echo "ERROR: pip is not available"
-        echo "=========================================="
-        echo "Please install pip first:"
-        case "$OS_TYPE" in
-        Linux)
-          echo "  Ubuntu/Debian: sudo apt install python3-pip"
-          echo "  Fedora/RHEL:   sudo dnf install python3-pip"
-          echo "  Arch:          sudo pacman -S python-pip"
-          ;;
-        Darwin)
-          echo "  brew install python3"
-          echo "  (pip comes bundled with Homebrew Python)"
-          ;;
-        esac
-        echo ""
-        echo "Then run this script again."
-        echo "=========================================="
-        exit 1
-      }
+    # Method 1: Try standard pip install with various flags (works on most Linux)
+    if [ "$install_success" = false ]; then
+      if pip3 install --user --break-system-packages "${missing_libs[@]}" 2>/dev/null; then
+        install_success=true
+      elif pip3 install --user "${missing_libs[@]}" 2>/dev/null; then
+        install_success=true
+      elif python3 -m pip install --user --break-system-packages "${missing_libs[@]}" 2>/dev/null; then
+        install_success=true
+      elif python3 -m pip install --user "${missing_libs[@]}" 2>/dev/null; then
+        install_success=true
+      fi
+    fi
+
+    # Method 2: Create a virtual environment (required for macOS Homebrew Python)
+    if [ "$install_success" = false ]; then
+      echo "Creating Python virtual environment at ${NESA_VENV}..."
+
+      if python3 -m venv "${NESA_VENV}" 2>/dev/null; then
+        # shellcheck disable=SC1091
+        source "${NESA_VENV}/bin/activate"
+        PYTHON_CMD="${NESA_VENV}/bin/python3"
+        PIP_CMD="${NESA_VENV}/bin/pip"
+
+        if $PIP_CMD install "${missing_libs[@]}" 2>/dev/null; then
+          install_success=true
+          echo "Python libraries installed in virtual environment."
+          echo ""
+          echo "NOTE: The virtual environment is at: ${NESA_VENV}"
+          echo "      Python commands in this script will use it automatically."
+        fi
+      fi
+    fi
+
+    # Method 3: Final fallback - show manual instructions
+    if [ "$install_success" = false ]; then
+      echo ""
+      echo "=========================================="
+      echo "ERROR: Failed to install Python libraries"
+      echo "=========================================="
+      echo ""
+      echo "Please install manually using one of these methods:"
+      echo ""
+      echo "Option 1 - Use a virtual environment (recommended):"
+      echo "  python3 -m venv ~/.nesa/venv"
+      echo "  source ~/.nesa/venv/bin/activate"
+      echo "  pip install ${missing_libs[*]}"
+      echo ""
+      echo "Option 2 - Force system install (if you understand the risks):"
+      echo "  pip3 install --user --break-system-packages ${missing_libs[*]}"
+      echo ""
+      echo "Then run this script again."
+      echo "=========================================="
+      exit 1
     fi
   fi
+
+  # Export the Python command for use in the rest of the script
+  export NESA_PYTHON_CMD="${PYTHON_CMD}"
+  export NESA_VENV="${NESA_VENV}"
 }
 
 # --- RUN DEPENDENCY CHECKS NOW (before any gum usage) ---
@@ -1326,7 +1348,7 @@ fetch_network_address() {
 
 generate_public_key() {
   local private_key="$1"
-  python3 -c "
+  ${NESA_PYTHON_CMD:-python3} -c "
 import ecdsa
 
 def strip_0x_prefix(key_hex):
@@ -1349,7 +1371,7 @@ derive_wallet_address() {
   local private_key="$1"
   local prefix="${2:-nesa}"
 
-  python3 -c "
+  ${NESA_PYTHON_CMD:-python3} -c "
 import hashlib
 import ecdsa
 
@@ -1415,7 +1437,7 @@ print(private_key_to_address('$private_key'))
 # Algorithm: SHA256(priv_key) -> Ed25519 seed -> Ed25519 pubkey -> SHA256 -> Base58
 generate_node_id() {
   local private_key="$1"
-  python3 -c "
+  ${NESA_PYTHON_CMD:-python3} -c "
 import hashlib
 import base58
 from cryptography.hazmat.primitives.asymmetric import ed25519
@@ -1623,7 +1645,7 @@ register_node() {
 
   log_line "Registering node: node_id=$node_id (max_retries=$max_retries)"
 
-  python3 << PYEOF
+  ${NESA_PYTHON_CMD:-python3} << PYEOF
 import sys
 import json
 import time
@@ -1763,7 +1785,7 @@ register_miner() {
 
   log_line "Registering miner: node_id=$node_id model=$model_name (max_retries=$max_retries)"
 
-  python3 << PYEOF
+  ${NESA_PYTHON_CMD:-python3} << PYEOF
 import sys
 import json
 import time
@@ -1902,7 +1924,7 @@ submit_miner_deposit() {
 
   log_line "Submitting miner deposit: node_id=$node_id, amount=${amount_microunes}unes (max_retries=$max_retries)"
 
-  python3 << PYEOF
+  ${NESA_PYTHON_CMD:-python3} << PYEOF
 import sys
 import json
 import time
@@ -2159,9 +2181,9 @@ $(gum style --foreground 245 "You can get testnet tokens from the Nesa faucet or
         local action
         action=$(gum choose --cursor.foreground 42 \
           "Check balance again" \
-          "Return to main menu")
+          "Return to Main Menu")
 
-        if [ "$action" = "Return to main menu" ]; then
+        if [ "$action" = "Return to Main Menu" ]; then
           return 1
         fi
 
@@ -2378,9 +2400,9 @@ a 7-day unbonding period.")"
       local action_choice
       action_choice=$(gum choose --cursor.foreground 42 \
         "Add more deposit" \
-        "Back to menu")
+        "Return to Main Menu")
 
-      if [ -z "$action_choice" ] || [ "$action_choice" = "Back to menu" ]; then
+      if [ -z "$action_choice" ] || [ "$action_choice" = "Return to Main Menu" ]; then
         return 0
       fi
     fi
@@ -2475,7 +2497,7 @@ a 7-day unbonding period.")"
       confirm=$(gum choose --cursor.foreground 42 "Submit Deposit" "Change Amount" "Cancel")
     else
       # Deposit is required, but allow back to menu to fund wallet first
-      confirm=$(gum choose --cursor.foreground 42 "Submit Deposit" "Change Amount" "Back to Main Menu")
+      confirm=$(gum choose --cursor.foreground 42 "Submit Deposit" "Change Amount" "Return to Main Menu")
     fi
 
     case "$confirm" in
@@ -2510,8 +2532,8 @@ a 7-day unbonding period.")"
           sleep 2
           # Ask if they want to add more
           local more_choice
-          more_choice=$(gum choose --cursor.foreground 42 "Add more deposit" "Back to menu")
-          if [ -z "$more_choice" ] || [ "$more_choice" = "Back to menu" ]; then
+          more_choice=$(gum choose --cursor.foreground 42 "Add more deposit" "Return to Main Menu")
+          if [ -z "$more_choice" ] || [ "$more_choice" = "Return to Main Menu" ]; then
             return 0
           fi
           continue
@@ -2530,7 +2552,7 @@ a 7-day unbonding period.")"
           fail_choice=$(gum choose --cursor.foreground 42 \
             "Try again" \
             "Change amount" \
-            "Back to main menu")
+            "Return to Main Menu")
 
           case "$fail_choice" in
             "Try again")
@@ -2539,7 +2561,7 @@ a 7-day unbonding period.")"
             "Change amount")
               continue
               ;;
-            "Back to main menu")
+            "Return to Main Menu")
               return 0
               ;;
             *)
@@ -2555,7 +2577,7 @@ a 7-day unbonding period.")"
         # Only available when deposit already meets minimum
         return 0
         ;;
-      "Back to Main Menu")
+      "Return to Main Menu")
         # Allow user to go back and fund wallet or do other things first
         return 0
         ;;
@@ -2908,10 +2930,14 @@ display_config() {
   fi
 
   config_content=$(echo "$config_content" | sed 's/"//g')
-  config_content="\`\`\`Makefile\n$config_content\n\`\`\`"
 
-  echo -e "$config_content" | gum format --type markdown --theme dracula
-
+  # Display config with explicit colors that work on both light and dark terminals
+  echo ""
+  echo "$config_content" | while IFS='=' read -r key value; do
+    [ -z "$key" ] && continue
+    gum style --foreground 6 "$key=$(gum style --foreground 10 "$value")"
+  done
+  echo ""
 }
 
 # Log ingestion endpoint - logs are signed locally and sent to central Nesa server
@@ -2929,29 +2955,42 @@ compose_up() {
     exit 1
   }
 
-  # Check for GPU support (use tr for portable lowercase conversion)
-  local nogpu_lower
-  nogpu_lower=$(echo "$NOGPU" | tr '[:upper:]' '[:lower:]')
-  if [[ "$nogpu_lower" == "true" || "$nogpu_lower" == "1" ]]; then
-    # User explicitly disabled GPU
-    gpu_mode="CPU-only (GPU disabled via NOGPU)"
-  elif command -v nvidia-smi >/dev/null 2>&1; then
-    # NVIDIA drivers present, check if container toolkit works
-    if docker info 2>/dev/null | grep -q "nvidia" || command -v nvidia-container-runtime >/dev/null 2>&1; then
-      compose_files="compose.nvidia.yml"
-      gpu_mode="GPU-accelerated (NVIDIA)"
-    else
-      echo ""
-      echo "WARNING: NVIDIA GPU detected but container toolkit not configured."
-      echo "Running in CPU-only mode. To enable GPU support, run:"
-      echo "  sudo nvidia-ctk runtime configure --runtime=docker"
-      echo "  sudo systemctl restart docker"
-      echo ""
-      gpu_mode="CPU-only (toolkit not configured)"
-    fi
+  # Detect CPU architecture
+  local arch
+  arch=$(uname -m)
+
+  # Check for ARM64 (Apple Silicon Macs, etc.)
+  if [[ "$arch" == "arm64" || "$arch" == "aarch64" ]]; then
+    echo ""
+    echo "Note: ARM64 architecture detected (Apple Silicon)."
+    echo "Running via Rosetta 2 emulation - this is normal and fully supported."
+    echo ""
+    gpu_mode="CPU-only (ARM64 via Rosetta)"
+  # Check for GPU support on x86_64 (use tr for portable lowercase conversion)
   else
-    # No NVIDIA GPU detected
-    gpu_mode="CPU-only (no GPU detected)"
+    local nogpu_lower
+    nogpu_lower=$(echo "$NOGPU" | tr '[:upper:]' '[:lower:]')
+    if [[ "$nogpu_lower" == "true" || "$nogpu_lower" == "1" ]]; then
+      # User explicitly disabled GPU
+      gpu_mode="CPU-only (GPU disabled via NOGPU)"
+    elif command -v nvidia-smi >/dev/null 2>&1; then
+      # NVIDIA drivers present, check if container toolkit works
+      if docker info 2>/dev/null | grep -q "nvidia" || command -v nvidia-container-runtime >/dev/null 2>&1; then
+        compose_files="compose.nvidia.yml"
+        gpu_mode="GPU-accelerated (NVIDIA)"
+      else
+        echo ""
+        echo "WARNING: NVIDIA GPU detected but container toolkit not configured."
+        echo "Running in CPU-only mode. To enable GPU support, run:"
+        echo "  sudo nvidia-ctk runtime configure --runtime=docker"
+        echo "  sudo systemctl restart docker"
+        echo ""
+        gpu_mode="CPU-only (toolkit not configured)"
+      fi
+    else
+      # No NVIDIA GPU detected
+      gpu_mode="CPU-only (no GPU detected)"
+    fi
   fi
 
   echo ""
@@ -3228,7 +3267,7 @@ show_status_and_logs_menu() {
       "View Live Logs (orchestrator)" \
       "View Last 100 Lines" \
       "View Watchtower Logs" \
-      "Back to Main Menu")
+      "Return to Main Menu")
 
     case "$choice" in
       "Refresh Status")
@@ -3286,7 +3325,7 @@ show_status_and_logs_menu() {
         echo ""
         read -r -s -p "Press Enter to continue..." && echo
         ;;
-      "Back to Main Menu"|"")
+      "Return to Main Menu"|"")
         return 0
         ;;
     esac
@@ -3494,11 +3533,13 @@ Your Nesa node is already configured."
       "Start/Restart Node")
         clear
         update_header
-        echo "Starting node containers..."
+        echo "Checking for updates..."
         cd "$WORKING_DIRECTORY/docker" || {
           echo "Error: Docker directory does not exist."
           exit 1
         }
+        git pull --quiet 2>/dev/null || true
+        echo "Starting node containers..."
         compose_up
         cd "$init_pwd" || exit
         echo ""
@@ -3577,9 +3618,9 @@ if [ "$prompt_for_node_pk" -eq 1 ]; then
     --header "How would you like to set up your wallet?" \
     "Enter existing private key" \
     "Generate new wallet" \
-    "Back to Main Menu")
+    "Return to Main Menu")
 
-  if [ -z "$wallet_choice" ] || [ "$wallet_choice" = "Back to Main Menu" ]; then
+  if [ -z "$wallet_choice" ] || [ "$wallet_choice" = "Return to Main Menu" ]; then
     # Restart script to return to main menu
     exec "$SCRIPT_PATH"
   fi
