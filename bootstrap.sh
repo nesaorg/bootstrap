@@ -679,18 +679,34 @@ check_python_and_ecdsa() {
 
   if [ ${#missing_libs[@]} -gt 0 ]; then
     echo "Installing required Python libraries: ${missing_libs[*]}..."
+
+    # PEP 668 (Python 3.12+) requires --break-system-packages for system pip
+    # We use --user to install to user directory, which is safe
+    local pip_args="--user --break-system-packages"
+
     # Try multiple pip installation methods
     if command_exists pip3; then
+      pip3 install $pip_args "${missing_libs[@]}" 2>/dev/null || \
       pip3 install --user "${missing_libs[@]}" 2>/dev/null || \
       pip3 install "${missing_libs[@]}" 2>/dev/null || \
+      python3 -m pip install $pip_args "${missing_libs[@]}" 2>/dev/null || \
       python3 -m pip install --user "${missing_libs[@]}" 2>/dev/null || \
-      python3 -m pip install "${missing_libs[@]}" || {
-        echo "ERROR: Failed to install Python libraries."
-        echo "Please install manually: pip3 install ${missing_libs[*]}"
+      python3 -m pip install "${missing_libs[@]}" 2>/dev/null || {
+        echo ""
+        echo "=========================================="
+        echo "ERROR: Failed to install Python libraries"
+        echo "=========================================="
+        echo "Please install manually:"
+        echo "  pip3 install --user ${missing_libs[*]}"
+        echo ""
+        echo "On Ubuntu 24.04+, you may need:"
+        echo "  pip3 install --user --break-system-packages ${missing_libs[*]}"
+        echo "=========================================="
         exit 1
       }
     else
       # pip3 command doesn't exist, try python3 -m pip
+      python3 -m pip install $pip_args "${missing_libs[@]}" 2>/dev/null || \
       python3 -m pip install --user "${missing_libs[@]}" 2>/dev/null || \
       python3 -m pip install "${missing_libs[@]}" 2>/dev/null || {
         echo ""
