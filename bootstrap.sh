@@ -692,10 +692,26 @@ check_python_and_ecdsa() {
     else
       # pip3 command doesn't exist, try python3 -m pip
       python3 -m pip install --user "${missing_libs[@]}" 2>/dev/null || \
-      python3 -m pip install "${missing_libs[@]}" || {
-        echo "ERROR: pip is not available."
-        echo "Please install pip: python3 -m ensurepip --upgrade"
-        echo "Then install: pip3 install ${missing_libs[*]}"
+      python3 -m pip install "${missing_libs[@]}" 2>/dev/null || {
+        echo ""
+        echo "=========================================="
+        echo "ERROR: pip is not available"
+        echo "=========================================="
+        echo "Please install pip first:"
+        case "$OS_TYPE" in
+        Linux)
+          echo "  Ubuntu/Debian: sudo apt install python3-pip"
+          echo "  Fedora/RHEL:   sudo dnf install python3-pip"
+          echo "  Arch:          sudo pacman -S python-pip"
+          ;;
+        Darwin)
+          echo "  brew install python3"
+          echo "  (pip comes bundled with Homebrew Python)"
+          ;;
+        esac
+        echo ""
+        echo "Then run this script again."
+        echo "=========================================="
         exit 1
       }
     fi
