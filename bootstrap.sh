@@ -3533,11 +3533,13 @@ Your Nesa node is already configured."
       "Start/Restart Node")
         clear
         update_header
-        echo "Starting node containers..."
+        echo "Checking for updates..."
         cd "$WORKING_DIRECTORY/docker" || {
           echo "Error: Docker directory does not exist."
           exit 1
         }
+        git pull --quiet 2>/dev/null || true
+        echo "Starting node containers..."
         compose_up
         cd "$init_pwd" || exit
         echo ""
