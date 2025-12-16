@@ -2508,7 +2508,7 @@ a 7-day unbonding period.")"
               continue
               ;;
             "Back to main menu")
-              return 1
+              return 0
               ;;
             *)
               continue
@@ -2525,7 +2525,7 @@ a 7-day unbonding period.")"
         ;;
       "Back to Main Menu")
         # Allow user to go back and fund wallet or do other things first
-        return 1
+        return 0
         ;;
       *)
         # Empty selection or escape - loop back
@@ -2897,8 +2897,10 @@ compose_up() {
     exit 1
   }
 
-  # Check for GPU support
-  if [[ "${NOGPU,,}" == "true" || "${NOGPU,,}" == "1" ]]; then
+  # Check for GPU support (use tr for portable lowercase conversion)
+  local nogpu_lower
+  nogpu_lower=$(echo "$NOGPU" | tr '[:upper:]' '[:lower:]')
+  if [[ "$nogpu_lower" == "true" || "$nogpu_lower" == "1" ]]; then
     # User explicitly disabled GPU
     gpu_mode="CPU-only (GPU disabled via NOGPU)"
   elif command -v nvidia-smi >/dev/null 2>&1; then
@@ -3480,6 +3482,10 @@ Your Nesa node is already configured."
         ;;
       "Exit")
         exit 0
+        ;;
+      *)
+        # Empty selection (escape pressed) or unknown - stay in menu
+        continue
         ;;
     esac
   done
