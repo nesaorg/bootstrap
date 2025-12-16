@@ -21,12 +21,20 @@ trap 'trap " " SIGINT SIGTERM SIGHUP; kill 0; wait; sigterm_handler' SIGINT SIGT
 # Store the real script path for restarts
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
+# Detect OS early for platform-specific code
+OS_TYPE="$(uname -s)"
+
 # ---- global bootstrap logging (captures ALL stdout/err while keeping the screen interactive) ----
 DEFAULT_WORKDIR="${HOME}/.nesa"
 LOG_DIR="${DEFAULT_WORKDIR}/logs"
-mkdir -p "${LOG_DIR}"
+ENV_DIR="${DEFAULT_WORKDIR}/env"
 
-
+# Create directories with error handling
+if ! mkdir -p "${DEFAULT_WORKDIR}" "${LOG_DIR}" "${ENV_DIR}" 2>/dev/null; then
+  echo "ERROR: Cannot create directory ${DEFAULT_WORKDIR}"
+  echo "Please check permissions on your home directory."
+  exit 1
+fi
 
 # Mirror STDOUT and STDERR to file; only the copy to file is timestamped.
 # This preserves gum's interactive UI on the terminal.
@@ -35,7 +43,7 @@ mkdir -p "${LOG_DIR}"
 # -----------------------------------------------------------------------------------------------
 LOG_FILE="${LOG_DIR}/bootstrap.log"
 _ts() { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
-log_line() { printf "[%s] %s\n" "$(_ts)" "$*" >>"$LOG_FILE"; }
+log_line() { printf "[%s] %s\n" "$(_ts)" "$*" >>"$LOG_FILE" 2>/dev/null || true; }
 log_stream() { while IFS= read -r line; do printf "[%s] %s\n" "$(_ts)" "$line" >>"$LOG_FILE"; done; }
 run_and_log() {
   local title="$1"
@@ -49,11 +57,6 @@ run_and_log() {
     return 1
   fi
 }
-
-DEFAULT_WORKDIR="${HOME}/.nesa"
-LOG_DIR="${DEFAULT_WORKDIR}/logs"
-ENV_DIR="${DEFAULT_WORKDIR}/env"
-mkdir -p "${DEFAULT_WORKDIR}" "${LOG_DIR}" "${ENV_DIR}"
 
 # Safe math helper - works on both GNU and BSD (Mac) awk
 # Usage: safe_divide <numerator> <divisor> <decimals>
@@ -78,8 +81,75 @@ safe_multiply() {
   awk -v a="$num1" -v b="$num2" -v p="$dec" 'BEGIN { printf "%.*f", p, a*b }'
 }
 
-: > "${LOG_DIR}/bootstrap.log"
-touch "${ENV_DIR}/base.env" "${ENV_DIR}/orchestrator.env" "${DEFAULT_WORKDIR}/.env"
+# Safe JSON parsing helper
+# Usage: safe_jq <json_string> <jq_filter> [default_value]
+# Returns the jq result or default_value if parsing fails
+safe_jq() {
+  local json="$1"
+  local filter="$2"
+  local default="${3:-}"
+
+  # Check if input looks like JSON (starts with { or [)
+  if [[ -z "$json" ]] || [[ ! "$json" =~ ^[[:space:]]*[\{\[] ]]; then
+    log_line "safe_jq: Invalid JSON input"
+    echo "$default"
+    return 1
+  fi
+
+  # Try to parse with jq
+  local result
+  result=$(echo "$json" | jq -r "$filter" 2>/dev/null)
+  local jq_exit=$?
+
+  # Check if jq failed or returned null/empty
+  if [[ $jq_exit -ne 0 ]] || [[ -z "$result" ]] || [[ "$result" == "null" ]]; then
+    log_line "safe_jq: jq filter '$filter' returned empty/null"
+    echo "$default"
+    return 1
+  fi
+
+  echo "$result"
+  return 0
+}
+
+# Fetch JSON from URL with error handling
+# Usage: fetch_json <url> [timeout_seconds]
+# Returns JSON string or empty on failure
+fetch_json() {
+  local url="$1"
+  local timeout="${2:-10}"
+  local response
+
+  response=$(curl -sfS --connect-timeout "$timeout" --max-time "$((timeout * 3))" "$url" 2>/dev/null)
+  local curl_exit=$?
+
+  if [[ $curl_exit -ne 0 ]] || [[ -z "$response" ]]; then
+    log_line "fetch_json: Failed to fetch $url (curl exit: $curl_exit)"
+    echo ""
+    return 1
+  fi
+
+  # Validate it's JSON
+  if ! echo "$response" | jq empty 2>/dev/null; then
+    log_line "fetch_json: Response from $url is not valid JSON"
+    echo ""
+    return 1
+  fi
+
+  echo "$response"
+  return 0
+}
+
+# Append to log file (don't truncate on restart)
+touch "${LOG_FILE}" 2>/dev/null || true
+log_line "=== Bootstrap session started ==="
+
+# Create env files if they don't exist
+touch "${ENV_DIR}/base.env" "${ENV_DIR}/orchestrator.env" "${DEFAULT_WORKDIR}/.env" 2>/dev/null || {
+  echo "ERROR: Cannot create config files in ${ENV_DIR}"
+  echo "Please check permissions."
+  exit 1
+}
 
 sigterm_handler() {
   printf "\n Aborting node setup. Cleaning up...\n"
@@ -88,20 +158,569 @@ sigterm_handler() {
   exit 1
 }
 
-# set -x
-terminal_size=$(stty size)
-terminal_height=${terminal_size% *}
-terminal_width=${terminal_size#* }
+# Get terminal size with fallback for non-interactive terminals (SSH, tmux, etc.)
+terminal_size=$(stty size 2>/dev/null || echo "24 80")
+terminal_height="${terminal_size% *}"
+terminal_width="${terminal_size#* }"
+# Validate we got numbers, fallback if not
+[[ "$terminal_height" =~ ^[0-9]+$ ]] || terminal_height=24
+[[ "$terminal_width" =~ ^[0-9]+$ ]] || terminal_width=80
 prompt_height=${PROMPT_HEIGHT:-1}
 main_color=43
 link_color=69
+
+#
+# EARLY DEPENDENCY CHECKS - must run before any gum usage
+#
+
+# check if a command exists
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+# Check if sudo is available and user can use it
+# Returns 0 if sudo works, 1 otherwise
+can_sudo() {
+  # Check if sudo exists
+  if ! command_exists sudo; then
+    return 1
+  fi
+  # Check if we can actually use sudo (might prompt for password)
+  # Use -n to avoid prompting - if it fails, sudo needs password
+  if sudo -n true 2>/dev/null; then
+    return 0
+  fi
+  # sudo exists but needs password - still return success but warn user
+  return 0
+}
+
+# Run a command with sudo if available, otherwise warn and try without
+# Usage: run_with_sudo command [args...]
+run_with_sudo() {
+  if can_sudo; then
+    sudo "$@"
+  else
+    echo "WARNING: sudo not available. Trying without elevated privileges..."
+    "$@"
+  fi
+}
+
+# Get system architecture for binary downloads
+get_arch() {
+  local arch
+  arch=$(uname -m)
+  case "$arch" in
+    x86_64|amd64) echo "x86_64" ;;
+    arm64|aarch64) echo "arm64" ;;
+    armv7l) echo "armv7" ;;
+    *) echo "$arch" ;;
+  esac
+}
+
+# Get OS name for binary downloads
+get_os() {
+  case "$(uname -s)" in
+    Darwin) echo "Darwin" ;;
+    Linux) echo "Linux" ;;
+    MINGW*|MSYS*|CYGWIN*) echo "Windows" ;;
+    *) echo "$(uname -s)" ;;
+  esac
+}
+
+# Download gum binary directly from GitHub releases (no package manager needed)
+install_gum_binary() {
+  local version="0.14.5"
+  local os arch url tmpdir
+  os=$(get_os)
+  arch=$(get_arch)
+
+  echo "Downloading gum v${version} for ${os}/${arch}..."
+
+  # Determine download URL
+  local ext="tar.gz"
+  [[ "$os" == "Windows" ]] && ext="zip"
+  url="https://github.com/charmbracelet/gum/releases/download/v${version}/gum_${version}_${os}_${arch}.${ext}"
+
+  tmpdir=$(mktemp -d)
+  cd "$tmpdir" || return 1
+
+  if ! curl -fsSL -o "gum.${ext}" "$url"; then
+    echo "Failed to download gum from $url"
+    rm -rf "$tmpdir"
+    return 1
+  fi
+
+  # Extract
+  if [[ "$ext" == "zip" ]]; then
+    unzip -q "gum.${ext}"
+  else
+    tar -xzf "gum.${ext}"
+  fi
+
+  # Install to user bin directory
+  local install_dir="$HOME/.local/bin"
+  mkdir -p "$install_dir"
+
+  # Find and copy the binary
+  if [[ -f "gum" ]]; then
+    cp gum "$install_dir/"
+  elif [[ -f "gum_${version}_${os}_${arch}/gum" ]]; then
+    cp "gum_${version}_${os}_${arch}/gum" "$install_dir/"
+  else
+    # Try to find it
+    local gum_bin
+    gum_bin=$(find . -name "gum" -type f | head -1)
+    if [[ -n "$gum_bin" ]]; then
+      cp "$gum_bin" "$install_dir/"
+    else
+      echo "Could not find gum binary in downloaded archive"
+      rm -rf "$tmpdir"
+      return 1
+    fi
+  fi
+
+  chmod +x "$install_dir/gum"
+  rm -rf "$tmpdir"
+
+  # Add to PATH for this session if not already there
+  if [[ ":$PATH:" != *":$install_dir:"* ]]; then
+    export PATH="$install_dir:$PATH"
+  fi
+
+  echo "gum installed to $install_dir/gum"
+  echo "NOTE: Add $install_dir to your PATH permanently by adding this to your ~/.bashrc or ~/.zshrc:"
+  echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
+  return 0
+}
+
+# Install gum using Go
+install_gum_go() {
+  echo "Installing gum using Go..."
+  go install github.com/charmbracelet/gum@latest
+}
+
+# Install gum based on OS and available tools
+install_gum() {
+  # Try direct binary download first (most reliable, no dependencies)
+  if install_gum_binary; then
+    return 0
+  fi
+
+  # Fallback: Try Go if available
+  if command_exists go; then
+    if install_gum_go; then
+      return 0
+    fi
+  fi
+
+  # Fallback: Try package managers
+  case "$(uname -s)" in
+  Darwin)
+    if command_exists brew; then
+      echo "Installing gum using Homebrew..."
+      brew install gum && return 0
+    fi
+    ;;
+  Linux)
+    if command_exists apt-get; then
+      echo "Installing gum on Ubuntu/Debian..."
+      sudo mkdir -p /etc/apt/keyrings
+      curl -fsSL https://repo.charm.sh/apt/gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/charm.gpg
+      echo "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" | sudo tee /etc/apt/sources.list.d/charm.list
+      sudo apt update && sudo apt install -y gum && return 0
+    elif command_exists pacman; then
+      echo "Installing gum using pacman..."
+      sudo pacman -S --noconfirm gum && return 0
+    fi
+    ;;
+  esac
+
+  echo "=========================================="
+  echo "ERROR: Failed to install gum automatically"
+  echo "=========================================="
+  echo "Please install gum manually:"
+  echo "  https://github.com/charmbracelet/gum#installation"
+  echo ""
+  echo "Quick options:"
+  echo "  Mac:   brew install gum"
+  echo "  Linux: See https://github.com/charmbracelet/gum#linux"
+  echo "=========================================="
+  exit 1
+}
+
+# Download jq binary directly
+install_jq_binary() {
+  local version="1.7.1"
+  local os arch url
+  os=$(get_os)
+  arch=$(get_arch)
+
+  echo "Downloading jq v${version} for ${os}/${arch}..."
+
+  # jq uses different naming convention
+  local jq_os jq_arch
+  case "$os" in
+    Darwin) jq_os="macos" ;;
+    Linux) jq_os="linux" ;;
+    Windows) jq_os="windows" ;;
+    *) jq_os="$os" ;;
+  esac
+
+  case "$arch" in
+    x86_64) jq_arch="amd64" ;;
+    arm64) jq_arch="arm64" ;;
+    *) jq_arch="$arch" ;;
+  esac
+
+  local ext=""
+  [[ "$os" == "Windows" ]] && ext=".exe"
+
+  url="https://github.com/jqlang/jq/releases/download/jq-${version}/jq-${jq_os}-${jq_arch}${ext}"
+
+  local install_dir="$HOME/.local/bin"
+  mkdir -p "$install_dir"
+
+  if curl -fsSL -o "$install_dir/jq" "$url"; then
+    chmod +x "$install_dir/jq"
+    if [[ ":$PATH:" != *":$install_dir:"* ]]; then
+      export PATH="$install_dir:$PATH"
+    fi
+    echo "jq installed to $install_dir/jq"
+    return 0
+  else
+    echo "Failed to download jq"
+    return 1
+  fi
+}
+
+# Install jq
+install_jq() {
+  # Try direct binary download first
+  if install_jq_binary; then
+    return 0
+  fi
+
+  # Fallback to package managers
+  case "$(uname -s)" in
+  Linux)
+    if command_exists apt-get; then
+      echo "Installing jq with apt-get..."
+      sudo apt-get update && sudo apt-get install -y jq && return 0
+    elif command_exists yum; then
+      sudo yum install -y jq && return 0
+    elif command_exists dnf; then
+      sudo dnf install -y jq && return 0
+    elif command_exists pacman; then
+      sudo pacman -S --noconfirm jq && return 0
+    fi
+    ;;
+  Darwin)
+    if command_exists brew; then
+      brew install jq && return 0
+    fi
+    ;;
+  esac
+
+  echo "Failed to install jq. Please install manually: https://jqlang.github.io/jq/download/"
+  exit 1
+}
+
+# Install Docker
+install_docker() {
+  case "$(uname -s)" in
+  Linux)
+    echo "Installing Docker using official convenience script..."
+    echo "(This requires sudo access)"
+    if curl -fsSL https://get.docker.com | sh; then
+      # Add current user to docker group
+      sudo usermod -aG docker "$USER" 2>/dev/null || true
+      echo ""
+      echo "Docker installed successfully!"
+      echo "NOTE: You may need to log out and back in for docker group permissions to take effect."
+      echo "      Or run: newgrp docker"
+      return 0
+    else
+      echo "Docker installation failed"
+      return 1
+    fi
+    ;;
+  Darwin)
+    echo "=========================================="
+    echo "Docker Desktop Required (Mac)"
+    echo "=========================================="
+    echo "Docker Desktop must be installed manually on Mac."
+    echo ""
+    echo "Download from: https://www.docker.com/products/docker-desktop/"
+    echo ""
+    echo "After installing, make sure Docker Desktop is running,"
+    echo "then run this script again."
+    echo "=========================================="
+    exit 1
+    ;;
+  MINGW*|MSYS*|CYGWIN*)
+    echo "=========================================="
+    echo "Docker Desktop Required (Windows)"
+    echo "=========================================="
+    echo "For Windows, please install Docker Desktop:"
+    echo "  https://www.docker.com/products/docker-desktop/"
+    echo ""
+    echo "Or if using WSL2, ensure Docker Desktop is configured"
+    echo "to integrate with your WSL distribution."
+    echo "=========================================="
+    exit 1
+    ;;
+  *)
+    echo "Unsupported OS for automatic Docker installation."
+    echo "Please install Docker manually: https://docs.docker.com/engine/install/"
+    exit 1
+    ;;
+  esac
+}
+
+# Check for NVIDIA GPU and container toolkit
+# Shows instructions if toolkit is missing - user installs manually and re-runs bootstrap
+check_nvidia_toolkit() {
+  # Only relevant on Linux
+  [[ "$OS_TYPE" != "Linux" ]] && return 0
+
+  # Check if nvidia-smi exists (NVIDIA drivers installed)
+  if ! command_exists nvidia-smi; then
+    # No NVIDIA GPU or drivers - continue silently in CPU-only mode
+    log_line "No NVIDIA GPU detected, continuing in CPU-only mode"
+    return 0
+  fi
+
+  # GPU detected - check if container toolkit is installed
+  local toolkit_installed=false
+  if command_exists nvidia-container-runtime; then
+    toolkit_installed=true
+  elif docker info 2>/dev/null | grep -qi "nvidia"; then
+    toolkit_installed=true
+  fi
+
+  if [ "$toolkit_installed" = true ]; then
+    log_line "NVIDIA GPU and container toolkit detected"
+    echo "✓ NVIDIA GPU detected with container toolkit installed"
+    return 0
+  fi
+
+  # GPU detected but toolkit missing - show instructions
+  echo ""
+  echo "════════════════════════════════════════════════════════════════"
+  echo "  NVIDIA GPU Detected - Container Toolkit Required"
+  echo "════════════════════════════════════════════════════════════════"
+  echo ""
+  echo "Your system has an NVIDIA GPU, but the NVIDIA Container Toolkit"
+  echo "is not installed. This toolkit is required for GPU acceleration."
+  echo ""
+  echo "To install the NVIDIA Container Toolkit:"
+  echo ""
+  if command_exists apt-get; then
+    echo "  # Add the NVIDIA repository"
+    echo "  curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \\"
+    echo "    | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg"
+    echo ""
+    echo "  curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \\"
+    echo "    | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \\"
+    echo "    | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list"
+    echo ""
+    echo "  # Install the toolkit"
+    echo "  sudo apt-get update"
+    echo "  sudo apt-get install -y nvidia-container-toolkit"
+    echo ""
+    echo "  # Configure Docker and restart"
+    echo "  sudo nvidia-ctk runtime configure --runtime=docker"
+    echo "  sudo systemctl restart docker"
+  elif command_exists dnf; then
+    echo "  # Add the NVIDIA repository"
+    echo "  curl -s -L https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo \\"
+    echo "    | sudo tee /etc/yum.repos.d/nvidia-container-toolkit.repo"
+    echo ""
+    echo "  # Install the toolkit"
+    echo "  sudo dnf install -y nvidia-container-toolkit"
+    echo ""
+    echo "  # Configure Docker and restart"
+    echo "  sudo nvidia-ctk runtime configure --runtime=docker"
+    echo "  sudo systemctl restart docker"
+  elif command_exists yum; then
+    echo "  # Add the NVIDIA repository"
+    echo "  curl -s -L https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo \\"
+    echo "    | sudo tee /etc/yum.repos.d/nvidia-container-toolkit.repo"
+    echo ""
+    echo "  # Install the toolkit"
+    echo "  sudo yum install -y nvidia-container-toolkit"
+    echo ""
+    echo "  # Configure Docker and restart"
+    echo "  sudo nvidia-ctk runtime configure --runtime=docker"
+    echo "  sudo systemctl restart docker"
+  else
+    echo "  See: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html"
+  fi
+  echo ""
+  echo "════════════════════════════════════════════════════════════════"
+  echo ""
+  echo "Options:"
+  echo "  1) Exit now, install the toolkit, then re-run bootstrap"
+  echo "  2) Continue without GPU (CPU-only mode)"
+  echo ""
+  read -p "Continue without GPU? [y/N] " -n 1 -r
+  echo
+
+  if [[ $REPLY =~ ^[Yy]$ ]]; then
+    echo ""
+    echo "Continuing in CPU-only mode..."
+    echo "You can install the toolkit later and re-run bootstrap for GPU support."
+    log_line "User chose to continue without GPU support"
+    return 0
+  else
+    echo ""
+    echo "Exiting. Please install the NVIDIA Container Toolkit and run bootstrap again."
+    log_line "User exited to install NVIDIA toolkit"
+    exit 0
+  fi
+}
+
+# Check if gum is installed, install if not
+check_gum_installed() {
+  if ! command_exists gum; then
+    echo "gum not found. Installing..."
+    install_gum
+  fi
+}
+
+# Check if jq is installed, install if not
+check_jq_installed() {
+  if ! command_exists jq; then
+    echo "jq not found. Installing..."
+    install_jq
+  fi
+}
+
+# Check if Docker is installed, install if not
+check_docker_installed() {
+  if ! command_exists docker; then
+    echo "Docker not found."
+    install_docker
+  fi
+
+  # Verify Docker is running
+  if ! docker info >/dev/null 2>&1; then
+    echo ""
+    echo "WARNING: Docker is installed but not running or accessible."
+    echo ""
+    case "$(uname -s)" in
+    Darwin)
+      echo "Please start Docker Desktop and try again."
+      ;;
+    Linux)
+      echo "Try one of these:"
+      echo "  1. Start Docker: sudo systemctl start docker"
+      echo "  2. Add yourself to docker group: sudo usermod -aG docker $USER"
+      echo "     Then log out and back in."
+      ;;
+    esac
+    exit 1
+  fi
+}
+
+# Check if curl is available (required for downloads)
+check_curl_installed() {
+  if ! command_exists curl; then
+    echo "=========================================="
+    echo "curl Required"
+    echo "=========================================="
+    echo "curl is required for downloading dependencies."
+    echo "Please install curl:"
+    case "$OS_TYPE" in
+    Darwin)
+      echo "  curl should be pre-installed on Mac"
+      echo "  If missing: brew install curl"
+      ;;
+    Linux)
+      echo "  Ubuntu/Debian: sudo apt install curl"
+      echo "  Fedora/RHEL:   sudo dnf install curl"
+      ;;
+    esac
+    echo "=========================================="
+    exit 1
+  fi
+}
+
+# Check Python and required libraries
+check_python_and_ecdsa() {
+  if ! command_exists python3; then
+    echo "=========================================="
+    echo "Python 3 Required"
+    echo "=========================================="
+    echo "Please install Python 3:"
+    case "$OS_TYPE" in
+    Darwin)
+      echo "  brew install python3"
+      echo "  or download from: https://www.python.org/downloads/"
+      ;;
+    Linux)
+      echo "  Ubuntu/Debian: sudo apt install python3 python3-pip"
+      echo "  Fedora/RHEL:   sudo dnf install python3 python3-pip"
+      ;;
+    esac
+    echo "=========================================="
+    exit 1
+  fi
+
+  # Check and install required Python libraries
+  local missing_libs=()
+
+  python3 -c "import ecdsa" 2>/dev/null || missing_libs+=("ecdsa")
+  python3 -c "import base58" 2>/dev/null || missing_libs+=("base58")
+  python3 -c "from cryptography.hazmat.primitives.asymmetric import ed25519" 2>/dev/null || missing_libs+=("cryptography")
+  python3 -c "import mospy" 2>/dev/null || missing_libs+=("mospy-wallet")
+  python3 -c "import httpx" 2>/dev/null || missing_libs+=("httpx")
+  python3 -c "import betterproto" 2>/dev/null || missing_libs+=("betterproto")
+
+  if [ ${#missing_libs[@]} -gt 0 ]; then
+    echo "Installing required Python libraries: ${missing_libs[*]}..."
+    # Try multiple pip installation methods
+    if command_exists pip3; then
+      pip3 install --user "${missing_libs[@]}" 2>/dev/null || \
+      pip3 install "${missing_libs[@]}" 2>/dev/null || \
+      python3 -m pip install --user "${missing_libs[@]}" 2>/dev/null || \
+      python3 -m pip install "${missing_libs[@]}" || {
+        echo "ERROR: Failed to install Python libraries."
+        echo "Please install manually: pip3 install ${missing_libs[*]}"
+        exit 1
+      }
+    else
+      # pip3 command doesn't exist, try python3 -m pip
+      python3 -m pip install --user "${missing_libs[@]}" 2>/dev/null || \
+      python3 -m pip install "${missing_libs[@]}" || {
+        echo "ERROR: pip is not available."
+        echo "Please install pip: python3 -m ensurepip --upgrade"
+        echo "Then install: pip3 install ${missing_libs[*]}"
+        exit 1
+      }
+    fi
+  fi
+}
+
+# --- RUN DEPENDENCY CHECKS NOW (before any gum usage) ---
+log_line "[STAGE 0]: Early dependency checks"
+check_curl_installed   # curl needed for downloads
+check_gum_installed
+check_jq_installed
+check_docker_installed
+check_python_and_ecdsa
+check_nvidia_toolkit   # shows instructions if GPU detected but toolkit missing
+
+# Now gum is guaranteed to be installed, create the logo
 logo=$(gum style --foreground 43 '
  _  _ ___ ___   _
 | \| | __/ __| /_\
 | .` | _|\__ \/ _ \
 |_|\_|___|___/_/ \_\')
 
-CHAIN_ID="nesa-testnet-3"
+# Chain configuration - can be overridden via environment variables
+CHAIN_ID="${CHAIN_ID:-nesa-testnet-3}"
+LCD_URL="${LCD_URL:-https://lcd.dev.nesa.ai}"
 domain="test.nesa.sh"
 
 chain_container="ghcr.io/nesaorg/nesachain:testnet-latest"
@@ -257,186 +876,6 @@ update_header() {
   echo ""
 }
 
-# check if a command exists
-command_exists() {
-  command -v "$1" >/dev/null 2>&1
-}
-
-# error handling function
-handle_install_failure() {
-  echo "Failed to install Gum using available methods due to permissions or unsupported OS..."
-  echo "Please install Gum manually by visiting: https://github.com/charmbracelet/gum"
-  exit 1
-}
-
-# install gum using Go
-install_gum_go() {
-  echo "Installing Gum using Go..."
-  go install github.com/charmbracelet/gum@latest || handle_install_failure
-}
-
-# install gum based on the operating system and availability of Go
-install_gum() {
-  # Try to install using Go if available
-  if command_exists go; then
-    install_gum_go
-    return
-  fi
-
-  case "$(uname -s)" in
-  Darwin)
-    echo "Installing Gum using Homebrew..."
-    brew install gum || handle_install_failure
-    ;;
-  Linux)
-    if command_exists apt-get; then
-      echo "Installing Gum on Ubuntu/Debian..."
-      sudo mkdir -p /etc/apt/keyrings
-      curl -fsSL https://repo.charm.sh/apt/gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/charm.gpg
-      echo "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" | sudo tee /etc/apt/sources.list.d/charm.list
-      sudo apt update && sudo apt install gum || handle_install_failure
-    elif command_exists pacman; then
-      echo "Installing Gum using pacman..."
-      sudo pacman -S gum || handle_install_failure
-    elif command_exists nix-env; then
-      echo "Installing Gum using Nix..."
-      nix-env -iA nixpkgs.gum || handle_install_failure
-    else
-      handle_install_failure
-    fi
-    ;;
-  CYGWIN* | MINGW32* | MSYS* | MINGW*)
-    if command_exists winget; then
-      echo "Installing Gum using WinGet..."
-      winget install charmbracelet.gum || handle_install_failure
-    elif command_exists scoop; then
-      echo "Installing Gum using Scoop..."
-      scoop install charm-gum || handle_install_failure
-    else
-      handle_install_failure
-    fi
-    ;;
-  *)
-    handle_install_failure
-    ;;
-  esac
-}
-log_line "[STAGE 1]: checking deps (gum, jq, python)"
-
-check_gum_installed() {
-  if ! command_exists gum; then
-    echo "Attempting to install gum..."
-    install_gum
-  fi
-}
-
-check_jq_installed() {
-  if ! command -v jq &>/dev/null; then
-    install_jq
-  fi
-}
-
-install_jq() {
-  case "$(uname -s)" in
-  Linux)
-    if command -v apt-get &>/dev/null; then
-      gum spin -s line --title "Installing jq with apt-get..." -- sudo apt-get update && sudo apt-get install -y jq
-    elif command -v yum &>/dev/null; then
-      gum spin -s line --title "Installing jq with yum..." -- sudo yum install -y jq
-    elif command -v pacman &>/dev/null; then
-      gum spin -s line --title "Installing jq with pacman..." -- sudo pacman -Sy jq
-    elif command -v zypper &>/dev/null; then
-      gum spin -s line --title "Installing jq with zypper..." -- sudo zypper install -y jq
-    elif command -v dnf &>/dev/null; then
-      gum spin -s line --title "Installing jq with dnf..." -- sudo dnf install -y jq
-    else
-      echo "Package manager not found. Please install jq manually."
-      exit 1
-    fi
-    ;;
-  Darwin)
-    if command -v brew &>/dev/null; then
-      gum spin -s line --title "Installing jq with brew..." -- brew install jq
-    else
-      echo "Homebrew is not installed. Please install jq manually."
-      exit 1
-    fi
-    ;;
-  *)
-    echo "Unsupported OS. Please install jq manually."
-    exit 1
-    ;;
-  esac
-}
-
-# check if Docker is installed
-check_docker_installed() {
-  if ! command_exists docker; then
-    echo "Docker is not installed. Please install Docker and try again."
-    exit 1
-  fi
-}
-
-check_python_and_ecdsa() {
-  if ! command -v python3 &>/dev/null; then
-    echo "Python 3 is not installed. Please install Python 3 and try again."
-    exit 1
-  fi
-
-  # Check and install required Python libraries
-  local missing_libs=()
-
-  if ! python3 -c "import ecdsa" &>/dev/null; then
-    missing_libs+=("ecdsa")
-  fi
-
-  if ! python3 -c "import base58" &>/dev/null; then
-    missing_libs+=("base58")
-  fi
-
-  if ! python3 -c "from cryptography.hazmat.primitives.asymmetric import ed25519" &>/dev/null; then
-    missing_libs+=("cryptography")
-  fi
-
-  if ! python3 -c "import mospy" &>/dev/null; then
-    missing_libs+=("mospy-wallet")
-  fi
-
-  if ! python3 -c "import httpx" &>/dev/null; then
-    missing_libs+=("httpx")
-  fi
-
-  if ! python3 -c "import betterproto" &>/dev/null; then
-    missing_libs+=("betterproto")
-  fi
-
-  if [ ${#missing_libs[@]} -gt 0 ]; then
-    echo "Installing required Python libraries: ${missing_libs[*]}..."
-    pip3 install "${missing_libs[@]}"
-  fi
-}
-
-# TODO: handle the need for sudo here -.-
-# check_nvidia_installed() {
-#     if ! command_exists nvidia-smi; then
-#         echo "NVIDIA drivers are not installed. Please install NVIDIA drivers and try again."
-#         exit 1
-#     fi
-
-#     if ! command_exists nvidia-container-runtime; then
-#         sudo curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
-#             && sudo curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
-#             sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-#             sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
-
-#         sudo apt-get update
-#         sudo apt-get install -y nvidia-container-toolkit
-
-#         sudo nvidia-ctk runtime configure --runtime=docker
-#         sudo systemctl restart docker
-#     fi
-# }
-
 # calculate max line length of the input
 max_line_length() {
   local max_len
@@ -464,63 +903,120 @@ download_import_key_expect() {
 get_linux_info() {
   local name version kernel architecture cpu cores ram disk_avail gpu gpu_count gpu_memory
   if [ -f /etc/os-release ]; then
-    . /etc/os-release
-    name=$NAME
-    version=$VERSION
+    # shellcheck disable=SC1091
+    . /etc/os-release 2>/dev/null || true
+    name="${NAME:-Unknown}"
+    version="${VERSION:-Unknown}"
   else
-    name="Not Available"
-    version="Not Available"
+    name="Linux"
+    version="Unknown"
   fi
-  kernel=$(uname -r)
-  architecture=$(uname -m)
-  cpu=$(lscpu | grep 'Model name' | awk -F: '{print $2}' | sed 's/^ *//')
-  cores=$(lscpu | grep '^CPU(s):' | awk '{print $2}')
-  ram=$(free -h | grep Mem | awk '{print $2}')
-  disk_avail=$(df -h --total | grep total | awk '{print $4}')
+  kernel=$(uname -r 2>/dev/null || echo "Unknown")
+  architecture=$(uname -m 2>/dev/null || echo "Unknown")
 
-  gpu=$(lspci | grep -i -e '3D controller' -e 'VGA compatible controller' | grep -i -e nvidia -e amd | awk -F: '{print $3}' | sed 's/^ *//')
-  gpu_count=$(lspci | grep -i -e '3D controller' -e 'VGA compatible controller' | grep -i -e nvidia -e amd | wc -l | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  # CPU info with fallback
+  if command -v lscpu >/dev/null 2>&1; then
+    cpu=$(lscpu 2>/dev/null | grep -i 'Model name' | awk -F: '{print $2}' | sed 's/^ *//' | head -1)
+    cores=$(lscpu 2>/dev/null | grep -i '^CPU(s):' | awk '{print $2}' | head -1)
+  fi
+  # Fallback to /proc/cpuinfo
+  if [ -z "$cpu" ] && [ -f /proc/cpuinfo ]; then
+    cpu=$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | awk -F: '{print $2}' | sed 's/^ *//')
+    cores=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)
+  fi
+  cpu="${cpu:-Unknown}"
+  cores="${cores:-1}"
 
-  gpu_memory=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | awk '{total += $1} END {print total " MB"}')
+  # RAM info with fallback
+  if command -v free >/dev/null 2>&1; then
+    ram=$(free -h 2>/dev/null | grep -i Mem | awk '{print $2}')
+  fi
+  if [ -z "$ram" ] && [ -f /proc/meminfo ]; then
+    ram=$(awk '/MemTotal/ {printf "%.1f GB", $2/1024/1024}' /proc/meminfo 2>/dev/null)
+  fi
+  ram="${ram:-Unknown}"
 
-  if [ -z "$gpu_memory" ]; then
-    gpu_memory=$(lshw -C display 2>/dev/null | grep -i size | awk '{print $2 " " $3}' | head -n 1)
+  # Disk space - df --total may not work on all systems
+  disk_avail=$(df -h --total 2>/dev/null | grep -i total | awk '{print $4}')
+  if [ -z "$disk_avail" ]; then
+    # Fallback: show root partition free space
+    disk_avail=$(df -h / 2>/dev/null | tail -1 | awk '{print $4}')
+  fi
+  disk_avail="${disk_avail:-Unknown}"
+
+  # GPU detection
+  if command -v lspci >/dev/null 2>&1; then
+    gpu=$(lspci 2>/dev/null | grep -i -e '3D controller' -e 'VGA compatible controller' | grep -i -e nvidia -e amd | awk -F: '{print $3}' | sed 's/^ *//' | head -1)
+    gpu_count=$(lspci 2>/dev/null | grep -i -e '3D controller' -e 'VGA compatible controller' | grep -i -e nvidia -e amd | wc -l | tr -d ' ')
   fi
 
-  NODE_OS="Linux $version"
-  NODE_ARCH="$architecture"
-  NODE_CPU="$cpu"
-  NODE_CORES="$cores"
+  # NVIDIA GPU memory
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    gpu_memory=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | awk '{total += $1} END {if(total>0) print total " MB"}')
+  fi
+
+  # Fallback GPU memory detection
+  if [ -z "$gpu_memory" ] && command -v lshw >/dev/null 2>&1; then
+    gpu_memory=$(sudo lshw -C display 2>/dev/null | grep -i size | awk '{print $2 " " $3}' | head -n 1)
+  fi
+
+  NODE_OS="Linux ${version}"
+  NODE_ARCH="${architecture}"
+  NODE_CPU="${cpu}"
+  NODE_CORES="${cores}"
   NODE_GPU="${gpu:-NA}"
   NODE_GPU_COUNT="${gpu_count:-0}"
-  NODE_RAM="$ram"
+  NODE_RAM="${ram}"
   NODE_VRAM="${gpu_memory:-NA}"
-  NODE_DISK_AVAIL="$disk_avail"
+  NODE_DISK_AVAIL="${disk_avail}"
 }
 
 get_macos_info() {
   local product_version build_version architecture cpu cores ram disk_avail gpu gpu_count gpu_memory
-  product_version=$(sw_vers -productVersion)
-  build_version=$(sw_vers -buildVersion)
-  architecture=$(uname -m)
-  cpu=$(sysctl -n machdep.cpu.brand_string)
-  cores=$(sysctl -n hw.ncpu)
-  ram=$(sysctl -n hw.memsize | awk '{print $1/1024/1024/1024 " GB"}')
-  disk_avail=$(df -h / | grep / | awk '{print $4}')
 
-  gpu=$(system_profiler SPDisplaysDataType | grep 'Chipset Model' | awk -F: '{print $2}' | sed 's/^ *//')
-  gpu_count=$(system_profiler SPDisplaysDataType | grep 'Chipset Model' | wc -l | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-  gpu_memory=$(system_profiler SPDisplaysDataType | grep 'VRAM' | awk -F: '{total += $2} END {print total " MB"}' | sed 's/^ *//')
+  # Basic system info
+  product_version=$(sw_vers -productVersion 2>/dev/null || echo "Unknown")
+  build_version=$(sw_vers -buildVersion 2>/dev/null || echo "Unknown")
+  architecture=$(uname -m 2>/dev/null || echo "Unknown")
 
-  NODE_OS="MacOS $product_version ($build_version)"
-  NODE_ARCH="$architecture"
-  NODE_CPU="$cpu"
-  NODE_CORES="$cores"
-  NODE_GPU="${gpu:-NA}"
-  NODE_GPU_COUNT="${gpu_count:-0}"
-  NODE_RAM="$ram"
+  # CPU info
+  cpu=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "Apple Silicon")
+  cores=$(sysctl -n hw.ncpu 2>/dev/null || echo "1")
+
+  # RAM - convert bytes to GB
+  local memsize
+  memsize=$(sysctl -n hw.memsize 2>/dev/null)
+  if [ -n "$memsize" ]; then
+    ram=$(awk -v mem="$memsize" 'BEGIN {printf "%.0f GB", mem/1024/1024/1024}')
+  else
+    ram="Unknown"
+  fi
+
+  # Disk space - Mac df doesn't support --total, use root partition
+  # Mac df -h output columns: Filesystem Size Used Avail Capacity Mounted
+  disk_avail=$(df -h / 2>/dev/null | tail -1 | awk '{print $4}')
+  disk_avail="${disk_avail:-Unknown}"
+
+  # GPU detection via system_profiler (may be slow, redirect stderr)
+  gpu=$(system_profiler SPDisplaysDataType 2>/dev/null | grep 'Chipset Model' | awk -F: '{print $2}' | sed 's/^ *//' | head -1)
+  gpu_count=$(system_profiler SPDisplaysDataType 2>/dev/null | grep -c 'Chipset Model' | tr -d ' ')
+
+  # GPU memory - Apple Silicon uses unified memory, VRAM field may not exist
+  gpu_memory=$(system_profiler SPDisplaysDataType 2>/dev/null | grep -i 'VRAM\|Total Number of Cores' | head -1 | awk -F: '{print $2}' | sed 's/^ *//')
+  if [ -z "$gpu_memory" ] || [ "$gpu_memory" = "0 MB" ]; then
+    # Apple Silicon shares system RAM
+    gpu_memory="Unified Memory"
+  fi
+
+  NODE_OS="macOS ${product_version} (${build_version})"
+  NODE_ARCH="${architecture}"
+  NODE_CPU="${cpu}"
+  NODE_CORES="${cores}"
+  NODE_GPU="${gpu:-Apple GPU}"
+  NODE_GPU_COUNT="${gpu_count:-1}"
+  NODE_RAM="${ram}"
   NODE_VRAM="${gpu_memory:-NA}"
-  NODE_DISK_AVAIL="$disk_avail"
+  NODE_DISK_AVAIL="${disk_avail}"
 }
 
 get_windows_info() {
@@ -551,46 +1047,64 @@ get_windows_info() {
 get_wsl_info() {
   local name version kernel architecture cpu cores ram disk_avail gpu gpu_count gpu_memory
   if [ -f /etc/os-release ]; then
-    . /etc/os-release
-    name=$NAME
-    version=$VERSION
+    # shellcheck disable=SC1091
+    . /etc/os-release 2>/dev/null || true
+    name="${NAME:-Unknown}"
+    version="${VERSION:-Unknown}"
   else
-    name="Not Available"
-    version="Not Available"
+    name="WSL"
+    version="Unknown"
   fi
-  kernel=$(uname -r)
-  architecture=$(uname -m)
-  cpu=$(grep -m1 'model name' /proc/cpuinfo | awk -F: '{print $2}' | sed 's/^ *//')
-  cores=$(grep -c '^processor' /proc/cpuinfo)
-  ram=$(free -h | grep Mem | awk '{print $2}')
-  disk_avail=$(df -h --total | grep total | awk '{print $4}')
+  kernel=$(uname -r 2>/dev/null || echo "Unknown")
+  architecture=$(uname -m 2>/dev/null || echo "Unknown")
 
-  if command -v nvidia-smi &>/dev/null; then
-    gpu=$(nvidia-smi --query-gpu=name --format=csv,noheader)
-    gpu_count=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
-    gpu_memory=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | awk '{total += $1} END {print total " MB"}')
+  # CPU info from /proc/cpuinfo (always available in WSL)
+  cpu=$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | awk -F: '{print $2}' | sed 's/^ *//')
+  cores=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)
+  cpu="${cpu:-Unknown}"
+  cores="${cores:-1}"
+
+  # RAM
+  if command -v free >/dev/null 2>&1; then
+    ram=$(free -h 2>/dev/null | grep -i Mem | awk '{print $2}')
+  fi
+  ram="${ram:-Unknown}"
+
+  # Disk - df --total should work in WSL
+  disk_avail=$(df -h --total 2>/dev/null | grep -i total | awk '{print $4}')
+  if [ -z "$disk_avail" ]; then
+    disk_avail=$(df -h / 2>/dev/null | tail -1 | awk '{print $4}')
+  fi
+  disk_avail="${disk_avail:-Unknown}"
+
+  # GPU - WSL2 can access Windows GPU via nvidia-smi
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    gpu=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
+    gpu_count=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | wc -l | tr -d ' ')
+    gpu_memory=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | awk '{total += $1} END {if(total>0) print total " MB"}')
   else
     gpu="NA"
     gpu_count=0
     gpu_memory="NA"
   fi
 
-  NODE_OS="WSL $version ($kernel)"
-  NODE_ARCH="$architecture"
-  NODE_CPU="$cpu"
-  NODE_CORES="$cores"
+  NODE_OS="WSL ${version} (${kernel})"
+  NODE_ARCH="${architecture}"
+  NODE_CPU="${cpu}"
+  NODE_CORES="${cores}"
   NODE_GPU="${gpu:-NA}"
   NODE_GPU_COUNT="${gpu_count:-0}"
-  NODE_RAM="$ram"
+  NODE_RAM="${ram}"
   NODE_VRAM="${gpu_memory:-NA}"
-  NODE_DISK_AVAIL="$disk_avail"
+  NODE_DISK_AVAIL="${disk_avail}"
 }
 log_line "[STAGE 2]: detecting hardware capabilities"
 
 detect_hardware_capabilities() {
-  case "$(uname -s)" in
+  case "$OS_TYPE" in
   Linux)
-    if grep -q Microsoft /proc/version; then
+    # Check for WSL - /proc/version contains "Microsoft" or "WSL"
+    if [ -f /proc/version ] && grep -qi -e Microsoft -e WSL /proc/version 2>/dev/null; then
       get_wsl_info
     else
       get_linux_info
@@ -603,7 +1117,18 @@ detect_hardware_capabilities() {
     get_windows_info
     ;;
   *)
-    echo "Unsupported platform"
+    echo "WARNING: Unsupported platform: $OS_TYPE"
+    echo "Hardware detection may be incomplete."
+    # Set defaults
+    NODE_OS="$OS_TYPE"
+    NODE_ARCH=$(uname -m 2>/dev/null || echo "Unknown")
+    NODE_CPU="Unknown"
+    NODE_CORES="1"
+    NODE_GPU="NA"
+    NODE_GPU_COUNT="0"
+    NODE_RAM="Unknown"
+    NODE_VRAM="NA"
+    NODE_DISK_AVAIL="Unknown"
     ;;
   esac
 }
@@ -641,7 +1166,7 @@ setup_docker_repository() {
 }
 
 get_swarms_map() {
-  local url="https://lcd.test.nesa.ai/nesachain/dht/get_orchestrators"
+  local url="${LCD_URL}/nesachain/dht/get_orchestrators"
   local json_data
   local excluded_node_ids
   local exclude_node_ids_json
@@ -712,7 +1237,7 @@ create_combined_node_id() {
 
 fetch_network_address() {
   local recreated_node_id="$1"
-  local url="https://lcd.test.nesa.ai/nesachain/dht/get_node/$recreated_node_id"
+  local url="${LCD_URL}/nesachain/dht/get_node/$recreated_node_id"
   local json_data
   local network_address
 
@@ -850,7 +1375,7 @@ print(derive_node_id('$private_key'))
 # Check wallet balance (UNES tokens)
 check_wallet_balance() {
   local wallet_address="$1"
-  local lcd_url="https://lcd.dev.nesa.ai"
+  local lcd_url="${LCD_URL}"
 
   log_line "Checking wallet balance for ${wallet_address}"
 
@@ -892,7 +1417,7 @@ check_wallet_balance() {
 # Check miner deposit status
 check_miner_deposit() {
   local node_id="$1"
-  local lcd_url="https://lcd.dev.nesa.ai"
+  local lcd_url="${LCD_URL}"
 
   log_line "Checking miner deposit for node ${node_id}"
 
@@ -964,7 +1489,7 @@ check_miner_deposit() {
 # Returns: ok|registered or ok|not_registered or error|message
 check_node_registered() {
   local node_id="$1"
-  local lcd_url="https://lcd.dev.nesa.ai"
+  local lcd_url="${LCD_URL}"
 
   log_line "Checking node registration for ${node_id}"
 
@@ -1068,7 +1593,7 @@ try:
     )
 
     # Connect and load account
-    client = HTTPClient(api="https://lcd.dev.nesa.ai")
+    client = HTTPClient(api="${LCD_URL}")
     try:
         client.load_account_data(account=account)
     except Exception as load_err:
@@ -1090,7 +1615,7 @@ try:
 
     # Broadcast using httpx for more control
     import httpx
-    broadcast_url = "https://lcd.dev.nesa.ai/cosmos/tx/v1beta1/txs"
+    broadcast_url = "${LCD_URL}/cosmos/tx/v1beta1/txs"
     payload = {"tx_bytes": tx_bytes, "mode": "BROADCAST_MODE_SYNC"}
 
     with httpx.Client(timeout=30.0) as http_client:
@@ -1173,7 +1698,7 @@ try:
     )
 
     # Connect and load account
-    client = HTTPClient(api="https://lcd.dev.nesa.ai")
+    client = HTTPClient(api="${LCD_URL}")
     try:
         client.load_account_data(account=account)
     except Exception as load_err:
@@ -1194,7 +1719,7 @@ try:
     tx_bytes = tx.get_tx_bytes_as_string()
 
     # Broadcast using httpx
-    broadcast_url = "https://lcd.dev.nesa.ai/cosmos/tx/v1beta1/txs"
+    broadcast_url = "${LCD_URL}/cosmos/tx/v1beta1/txs"
     payload = {"tx_bytes": tx_bytes, "mode": "BROADCAST_MODE_SYNC"}
 
     with httpx.Client(timeout=30.0) as http_client:
@@ -1263,7 +1788,7 @@ try:
     )
 
     # Load account data from chain
-    client = HTTPClient(api="https://lcd.dev.nesa.ai")
+    client = HTTPClient(api="${LCD_URL}")
     try:
         client.load_account_data(account=account)
     except Exception as load_err:
@@ -1301,7 +1826,7 @@ try:
     tx_bytes = tx.get_tx_bytes_as_string()
 
     # Broadcast transaction
-    broadcast_url = "https://lcd.dev.nesa.ai/cosmos/tx/v1beta1/txs"
+    broadcast_url = "${LCD_URL}/cosmos/tx/v1beta1/txs"
     broadcast_payload = {
         "tx_bytes": tx_bytes,
         "mode": "BROADCAST_MODE_SYNC"
@@ -1834,7 +2359,7 @@ a 7-day unbonding period.")"
 
 # Check minimum deposit requirements
 check_min_deposit() {
-  local lcd_url="https://lcd.dev.nesa.ai"
+  local lcd_url="${LCD_URL}"
   local params_endpoint="${lcd_url}/nesachain/dht/params"
 
   log_line "Checking minimum deposit requirements"
@@ -2187,14 +2712,40 @@ export NODE_PRIV_HEX="$NODE_PRIV_KEY"
 
 compose_up() {
   local compose_files="compose.yml"
+  local gpu_mode="CPU-only"
+
   cd "$WORKING_DIRECTORY/docker" || {
     echo "Error: Docker directory does not exist."
     exit 1
   }
 
-  if command -v nvidia-smi >/dev/null && [[ "${NOGPU,,}" != "true" && "${NOGPU,,}" != "1" ]]; then
-    compose_files="compose.nvidia.yml"
+  # Check for GPU support
+  if [[ "${NOGPU,,}" == "true" || "${NOGPU,,}" == "1" ]]; then
+    # User explicitly disabled GPU
+    gpu_mode="CPU-only (GPU disabled via NOGPU)"
+  elif command -v nvidia-smi >/dev/null 2>&1; then
+    # NVIDIA drivers present, check if container toolkit works
+    if docker info 2>/dev/null | grep -q "nvidia" || command -v nvidia-container-runtime >/dev/null 2>&1; then
+      compose_files="compose.nvidia.yml"
+      gpu_mode="GPU-accelerated (NVIDIA)"
+    else
+      echo ""
+      echo "WARNING: NVIDIA GPU detected but container toolkit not configured."
+      echo "Running in CPU-only mode. To enable GPU support, run:"
+      echo "  sudo nvidia-ctk runtime configure --runtime=docker"
+      echo "  sudo systemctl restart docker"
+      echo ""
+      gpu_mode="CPU-only (toolkit not configured)"
+    fi
+  else
+    # No NVIDIA GPU detected
+    gpu_mode="CPU-only (no GPU detected)"
   fi
+
+  echo ""
+  echo "Starting containers in ${gpu_mode} mode..."
+  echo "Using compose file: ${compose_files}"
+  echo ""
 
   local files="-f ${compose_files}"
   if [ -f "compose.logs.yml" ]; then
@@ -2219,7 +2770,8 @@ compose_up() {
       exit 1
     }
 
-  echo "Docker Compose started successfully."
+  echo ""
+  echo "Docker Compose started successfully! (${gpu_mode})"
 }
 
 load_node_id() {
@@ -2307,12 +2859,7 @@ PUBLIC_IP=$(curl -s4 ifconfig.me)
 # bootstrap core logic
 #
 
-# deps
-check_gum_installed
-check_docker_installed
-check_jq_installed
-check_python_and_ecdsa
-# check_nvidia_installed
+# deps already checked at script start (STAGE 0)
 detect_hardware_capabilities
 clear
 update_header
