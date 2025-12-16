@@ -2930,10 +2930,14 @@ display_config() {
   fi
 
   config_content=$(echo "$config_content" | sed 's/"//g')
-  config_content="\`\`\`Makefile\n$config_content\n\`\`\`"
 
-  echo -e "$config_content" | gum format --type markdown --theme dracula
-
+  # Display config with explicit colors that work on both light and dark terminals
+  echo ""
+  echo "$config_content" | while IFS='=' read -r key value; do
+    [ -z "$key" ] && continue
+    gum style --foreground 6 "$key=$(gum style --foreground 10 "$value")"
+  done
+  echo ""
 }
 
 # Log ingestion endpoint - logs are signed locally and sent to central Nesa server
@@ -2951,29 +2955,42 @@ compose_up() {
     exit 1
   }
 
-  # Check for GPU support (use tr for portable lowercase conversion)
-  local nogpu_lower
-  nogpu_lower=$(echo "$NOGPU" | tr '[:upper:]' '[:lower:]')
-  if [[ "$nogpu_lower" == "true" || "$nogpu_lower" == "1" ]]; then
-    # User explicitly disabled GPU
-    gpu_mode="CPU-only (GPU disabled via NOGPU)"
-  elif command -v nvidia-smi >/dev/null 2>&1; then
-    # NVIDIA drivers present, check if container toolkit works
-    if docker info 2>/dev/null | grep -q "nvidia" || command -v nvidia-container-runtime >/dev/null 2>&1; then
-      compose_files="compose.nvidia.yml"
-      gpu_mode="GPU-accelerated (NVIDIA)"
-    else
-      echo ""
-      echo "WARNING: NVIDIA GPU detected but container toolkit not configured."
-      echo "Running in CPU-only mode. To enable GPU support, run:"
-      echo "  sudo nvidia-ctk runtime configure --runtime=docker"
-      echo "  sudo systemctl restart docker"
-      echo ""
-      gpu_mode="CPU-only (toolkit not configured)"
-    fi
+  # Detect CPU architecture
+  local arch
+  arch=$(uname -m)
+
+  # Check for ARM64 (Apple Silicon Macs, etc.)
+  if [[ "$arch" == "arm64" || "$arch" == "aarch64" ]]; then
+    echo ""
+    echo "Note: ARM64 architecture detected (Apple Silicon)."
+    echo "Running via Rosetta 2 emulation - this is normal and fully supported."
+    echo ""
+    gpu_mode="CPU-only (ARM64 via Rosetta)"
+  # Check for GPU support on x86_64 (use tr for portable lowercase conversion)
   else
-    # No NVIDIA GPU detected
-    gpu_mode="CPU-only (no GPU detected)"
+    local nogpu_lower
+    nogpu_lower=$(echo "$NOGPU" | tr '[:upper:]' '[:lower:]')
+    if [[ "$nogpu_lower" == "true" || "$nogpu_lower" == "1" ]]; then
+      # User explicitly disabled GPU
+      gpu_mode="CPU-only (GPU disabled via NOGPU)"
+    elif command -v nvidia-smi >/dev/null 2>&1; then
+      # NVIDIA drivers present, check if container toolkit works
+      if docker info 2>/dev/null | grep -q "nvidia" || command -v nvidia-container-runtime >/dev/null 2>&1; then
+        compose_files="compose.nvidia.yml"
+        gpu_mode="GPU-accelerated (NVIDIA)"
+      else
+        echo ""
+        echo "WARNING: NVIDIA GPU detected but container toolkit not configured."
+        echo "Running in CPU-only mode. To enable GPU support, run:"
+        echo "  sudo nvidia-ctk runtime configure --runtime=docker"
+        echo "  sudo systemctl restart docker"
+        echo ""
+        gpu_mode="CPU-only (toolkit not configured)"
+      fi
+    else
+      # No NVIDIA GPU detected
+      gpu_mode="CPU-only (no GPU detected)"
+    fi
   fi
 
   echo ""
