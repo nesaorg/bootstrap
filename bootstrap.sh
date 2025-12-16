@@ -718,7 +718,9 @@ logo=$(gum style --foreground 43 '
 | .` | _|\__ \/ _ \
 |_|\_|___|___/_/ \_\')
 
-CHAIN_ID="nesa-testnet-3"
+# Chain configuration - can be overridden via environment variables
+CHAIN_ID="${CHAIN_ID:-nesa-testnet-3}"
+LCD_URL="${LCD_URL:-https://lcd.dev.nesa.ai}"
 domain="test.nesa.sh"
 
 chain_container="ghcr.io/nesaorg/nesachain:testnet-latest"
@@ -1164,7 +1166,7 @@ setup_docker_repository() {
 }
 
 get_swarms_map() {
-  local url="https://lcd.test.nesa.ai/nesachain/dht/get_orchestrators"
+  local url="${LCD_URL}/nesachain/dht/get_orchestrators"
   local json_data
   local excluded_node_ids
   local exclude_node_ids_json
@@ -1235,7 +1237,7 @@ create_combined_node_id() {
 
 fetch_network_address() {
   local recreated_node_id="$1"
-  local url="https://lcd.test.nesa.ai/nesachain/dht/get_node/$recreated_node_id"
+  local url="${LCD_URL}/nesachain/dht/get_node/$recreated_node_id"
   local json_data
   local network_address
 
@@ -1373,7 +1375,7 @@ print(derive_node_id('$private_key'))
 # Check wallet balance (UNES tokens)
 check_wallet_balance() {
   local wallet_address="$1"
-  local lcd_url="https://lcd.dev.nesa.ai"
+  local lcd_url="${LCD_URL}"
 
   log_line "Checking wallet balance for ${wallet_address}"
 
@@ -1415,7 +1417,7 @@ check_wallet_balance() {
 # Check miner deposit status
 check_miner_deposit() {
   local node_id="$1"
-  local lcd_url="https://lcd.dev.nesa.ai"
+  local lcd_url="${LCD_URL}"
 
   log_line "Checking miner deposit for node ${node_id}"
 
@@ -1487,7 +1489,7 @@ check_miner_deposit() {
 # Returns: ok|registered or ok|not_registered or error|message
 check_node_registered() {
   local node_id="$1"
-  local lcd_url="https://lcd.dev.nesa.ai"
+  local lcd_url="${LCD_URL}"
 
   log_line "Checking node registration for ${node_id}"
 
@@ -1591,7 +1593,7 @@ try:
     )
 
     # Connect and load account
-    client = HTTPClient(api="https://lcd.dev.nesa.ai")
+    client = HTTPClient(api="${LCD_URL}")
     try:
         client.load_account_data(account=account)
     except Exception as load_err:
@@ -1613,7 +1615,7 @@ try:
 
     # Broadcast using httpx for more control
     import httpx
-    broadcast_url = "https://lcd.dev.nesa.ai/cosmos/tx/v1beta1/txs"
+    broadcast_url = "${LCD_URL}/cosmos/tx/v1beta1/txs"
     payload = {"tx_bytes": tx_bytes, "mode": "BROADCAST_MODE_SYNC"}
 
     with httpx.Client(timeout=30.0) as http_client:
@@ -1696,7 +1698,7 @@ try:
     )
 
     # Connect and load account
-    client = HTTPClient(api="https://lcd.dev.nesa.ai")
+    client = HTTPClient(api="${LCD_URL}")
     try:
         client.load_account_data(account=account)
     except Exception as load_err:
@@ -1717,7 +1719,7 @@ try:
     tx_bytes = tx.get_tx_bytes_as_string()
 
     # Broadcast using httpx
-    broadcast_url = "https://lcd.dev.nesa.ai/cosmos/tx/v1beta1/txs"
+    broadcast_url = "${LCD_URL}/cosmos/tx/v1beta1/txs"
     payload = {"tx_bytes": tx_bytes, "mode": "BROADCAST_MODE_SYNC"}
 
     with httpx.Client(timeout=30.0) as http_client:
@@ -1786,7 +1788,7 @@ try:
     )
 
     # Load account data from chain
-    client = HTTPClient(api="https://lcd.dev.nesa.ai")
+    client = HTTPClient(api="${LCD_URL}")
     try:
         client.load_account_data(account=account)
     except Exception as load_err:
@@ -1824,7 +1826,7 @@ try:
     tx_bytes = tx.get_tx_bytes_as_string()
 
     # Broadcast transaction
-    broadcast_url = "https://lcd.dev.nesa.ai/cosmos/tx/v1beta1/txs"
+    broadcast_url = "${LCD_URL}/cosmos/tx/v1beta1/txs"
     broadcast_payload = {
         "tx_bytes": tx_bytes,
         "mode": "BROADCAST_MODE_SYNC"
@@ -2357,7 +2359,7 @@ a 7-day unbonding period.")"
 
 # Check minimum deposit requirements
 check_min_deposit() {
-  local lcd_url="https://lcd.dev.nesa.ai"
+  local lcd_url="${LCD_URL}"
   local params_endpoint="${lcd_url}/nesachain/dht/params"
 
   log_line "Checking minimum deposit requirements"
