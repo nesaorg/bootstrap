@@ -850,6 +850,132 @@ MONIKER=${MONIKER:-$(hostname -s)}
 # basic helper functions
 #
 
+# Show wizard step header with context/help information
+show_step_header() {
+  local step_num="$1"
+  local total_steps="$2"
+  local title="$3"
+  local description="$4"
+  local format_info="$5"
+  local example="$6"
+  local required="$7"  # "required" or "optional"
+  local help_link="$8" # optional URL
+
+  local req_text
+  if [ "$required" = "required" ]; then
+    req_text=$(gum style --foreground 214 "This field is REQUIRED")
+  else
+    req_text=$(gum style --foreground 245 "This field is OPTIONAL")
+  fi
+
+  local help_text=""
+  if [ -n "$help_link" ]; then
+    help_text="
+$(gum style --foreground 250 "Get it at:") $(gum style --foreground "$link_color" "$help_link")"
+  fi
+
+  echo ""
+  gum style --border rounded --padding "1 2" --border-foreground "$main_color" \
+    "$(gum style --foreground "$main_color" --bold "STEP $step_num OF $total_steps: $title")
+
+$(gum style --foreground 255 "$description")
+
+$(gum style --foreground 250 "Format:") $(gum style --foreground "$link_color" "$format_info")
+$(gum style --foreground 250 "Example:") $(gum style --foreground 245 "$example")$help_text
+
+$req_text
+
+$(gum style --foreground 245 "Press Enter to continue")"
+  echo ""
+}
+
+# Show wizard navigation buttons
+wizard_nav() {
+  local show_back="$1"  # "yes" or "no"
+
+  echo ""
+  if [ "$show_back" = "yes" ]; then
+    gum choose --cursor.foreground "$main_color" \
+      "Continue" \
+      "← Back" \
+      "Cancel Setup"
+  else
+    gum choose --cursor.foreground "$main_color" \
+      "Continue" \
+      "Cancel Setup"
+  fi
+}
+
+# Validate wizard input - returns "ok" or "error|message"
+validate_input() {
+  local type="$1"
+  local value="$2"
+
+  case "$type" in
+    "moniker")
+      # 3-32 chars, alphanumeric and hyphens
+      if [ ${#value} -lt 3 ] || [ ${#value} -gt 32 ]; then
+        echo "error|Node name must be 3-32 characters (got ${#value})"
+        return 1
+      fi
+      # Use grep for portability (no [[ =~ ]] which varies across bash versions)
+      if ! echo "$value" | grep -qE '^[a-zA-Z0-9-]+$'; then
+        echo "error|Node name can only contain letters, numbers, and hyphens"
+        return 1
+      fi
+      echo "ok"
+      ;;
+    "referral")
+      # Optional - empty is ok
+      if [ -z "$value" ]; then
+        echo "ok"
+        return 0
+      fi
+      # If provided, must be nesa1... format (~44 chars)
+      if ! echo "$value" | grep -qE '^nesa1[a-z0-9]{38,40}$'; then
+        echo "error|Referral code must start with 'nesa1' and be about 44 characters"
+        return 1
+      fi
+      echo "ok"
+      ;;
+    "hf_token")
+      # Optional - empty triggers warning but is allowed
+      if [ -z "$value" ]; then
+        echo "warn|No API key provided. Some gated models may not be available."
+        return 0
+      fi
+      # If provided, validate format
+      if ! echo "$value" | grep -qE '^hf_[a-zA-Z0-9]{20,50}$'; then
+        echo "error|API key should start with 'hf_' and be about 40 characters"
+        return 1
+      fi
+      echo "ok"
+      ;;
+    "private_key")
+      local key="$value"
+      # Remove 0x prefix if present
+      key="${key#0x}"
+      key="${key#0X}"
+      if [ -z "$key" ]; then
+        echo "error|Private key is required"
+        return 1
+      fi
+      if [ ${#key} -ne 64 ]; then
+        echo "error|Private key must be 64 hex characters (got ${#key})"
+        return 1
+      fi
+      if ! echo "$key" | grep -qE '^[a-fA-F0-9]{64}$'; then
+        echo "error|Private key must contain only hexadecimal characters (0-9, a-f)"
+        return 1
+      fi
+      echo "ok"
+      ;;
+    *)
+      echo "ok"
+      ;;
+  esac
+}
+
 # print if the output fits on screen
 print_test() {
   local no_color
@@ -2414,6 +2540,13 @@ a 7-day unbonding period.")"
       --prompt "Deposit amount: " \
       --prompt.foreground "$main_color")
 
+    echo ""
+    local nav
+    nav=$(gum choose --cursor.foreground "$main_color" "Next →" "← Back")
+    if [ "$nav" = "← Back" ]; then
+      continue  # Re-show deposit screen
+    fi
+
     # Handle empty input or cancel
     if [ -z "$deposit_amount" ]; then
       echo ""
@@ -2926,7 +3059,7 @@ display_config() {
     local pub_key=$(generate_public_key "$NODE_PRIV_KEY")
     local length=${#NODE_PRIV_KEY}
     priv_key_display="$(printf '%*s' "$((length - 4))" '' | tr ' ' '*')${NODE_PRIV_KEY: -4}"
-    config_content="$config_content"$'\n'"PRIVATE_KEY=$priv_key_display\nPUBLIC_KEY=$pub_key"
+    config_content="$config_content"$'\n'"PRIVATE_KEY=$priv_key_display"$'\n'"PUBLIC_KEY=$pub_key"
   fi
 
   config_content=$(echo "$config_content" | sed 's/"//g')
@@ -3025,6 +3158,183 @@ compose_up() {
   echo "Docker Compose started successfully! (${gpu_mode})"
 }
 
+# Helper to detect compose files from container labels
+get_compose_files() {
+  local compose_dir="$1"
+  local config_files
+  config_files=$(docker inspect orchestrator --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' 2>/dev/null)
+
+  local files=""
+  if [ -n "$config_files" ]; then
+    # Parse comma-separated list (portable - works on bash 3.x and zsh)
+    local OLD_IFS="$IFS"
+    IFS=','
+    for f in $config_files; do
+      local basename_f
+      basename_f=$(basename "$f")
+      if [ -f "${compose_dir}/${basename_f}" ]; then
+        files="${files} -f ${basename_f}"
+      fi
+    done
+    IFS="$OLD_IFS"
+  fi
+
+  # Fallback if no labels found or empty result
+  if [ -z "$files" ]; then
+    if [ -f "${compose_dir}/compose.nvidia.yml" ]; then
+      files="-f compose.nvidia.yml"
+    else
+      files="-f compose.yml"
+    fi
+    if [ -f "${compose_dir}/compose.logs.yml" ]; then
+      files="${files} -f compose.logs.yml"
+    fi
+  fi
+
+  echo "$files"
+}
+
+# Stop node containers
+stop_node() {
+  local compose_dir="${WORKING_DIRECTORY:-$HOME/.nesa}/docker"
+  if [ ! -d "$compose_dir" ]; then
+    gum style --foreground 196 "Docker directory not found. Is the node installed?"
+    sleep 2
+    return 1
+  fi
+
+  cd "$compose_dir" || return 1
+  local files
+  files=$(get_compose_files "$compose_dir")
+
+  gum spin -s line --title "Stopping node containers..." -- \
+    docker compose ${files} stop
+
+  echo ""
+  gum style --foreground 42 "Node stopped."
+  sleep 1
+}
+
+# Pause node containers
+pause_node() {
+  local compose_dir="${WORKING_DIRECTORY:-$HOME/.nesa}/docker"
+  if [ ! -d "$compose_dir" ]; then
+    gum style --foreground 196 "Docker directory not found. Is the node installed?"
+    sleep 2
+    return 1
+  fi
+
+  cd "$compose_dir" || return 1
+  local files
+  files=$(get_compose_files "$compose_dir")
+
+  gum spin -s line --title "Pausing node containers..." -- \
+    docker compose ${files} pause
+
+  echo ""
+  gum style --foreground 42 "Node paused."
+  sleep 1
+}
+
+# Resume paused node containers
+resume_node() {
+  local compose_dir="${WORKING_DIRECTORY:-$HOME/.nesa}/docker"
+  if [ ! -d "$compose_dir" ]; then
+    gum style --foreground 196 "Docker directory not found. Is the node installed?"
+    sleep 2
+    return 1
+  fi
+
+  cd "$compose_dir" || return 1
+  local files
+  files=$(get_compose_files "$compose_dir")
+
+  gum spin -s line --title "Resuming node containers..." -- \
+    docker compose ${files} unpause
+
+  echo ""
+  gum style --foreground 42 "Node resumed."
+  sleep 1
+}
+
+# Delete node - removes all containers and data
+delete_node() {
+  clear
+  update_header
+
+  echo ""
+  gum style --border rounded --padding "1 2" --border-foreground 196 \
+    "$(gum style --foreground 196 --bold "PERMANENT NODE DELETION")
+
+$(gum style --foreground 250 "This action is") $(gum style --foreground 196 --bold "IRREVERSIBLE")$(gum style --foreground 250 ". All data will be permanently deleted:")
+
+  $(gum style --foreground 250 "•") Docker containers (orchestrator, watchtower, log-signer)
+  $(gum style --foreground 250 "•") Configuration files (~/.nesa/env/)
+  $(gum style --foreground 250 "•") Bootstrap logs (~/.nesa/logs/)
+  $(gum style --foreground 250 "•") Model cache (~/.nesa/cache/)
+  $(gum style --foreground 250 "•") Node identity files (~/.nesa/identity/)
+
+$(gum style --foreground 196 --bold "WARNING: Your wallet private key will NOT be recoverable")
+$(gum style --foreground 196 "if you have not backed it up elsewhere.")"
+
+  echo ""
+  echo ""
+
+  # Require typing DELETE to confirm
+  local confirm_text
+  confirm_text=$(gum input \
+    --prompt "Type DELETE to confirm permanent deletion: " \
+    --placeholder "" \
+    --prompt.foreground 196)
+
+  if [ "$confirm_text" != "DELETE" ]; then
+    echo ""
+    gum style --foreground 214 "Deletion cancelled. Returning to menu."
+    sleep 2
+    return 0
+  fi
+
+  echo ""
+
+  # Final confirmation
+  if ! gum confirm --prompt.foreground 196 \
+    --affirmative "Yes, delete everything" \
+    --negative "No, cancel" \
+    "Are you absolutely sure?"; then
+    echo ""
+    gum style --foreground 214 "Deletion cancelled."
+    sleep 2
+    return 0
+  fi
+
+  echo ""
+
+  # Execute deletion
+  local compose_dir="${WORKING_DIRECTORY:-$HOME/.nesa}/docker"
+  if [ -d "$compose_dir" ]; then
+    cd "$compose_dir" 2>/dev/null
+    gum spin -s line --title "Stopping and removing containers..." -- \
+      docker compose -f compose.yml down --remove-orphans --volumes 2>/dev/null
+  fi
+
+  # Force remove any remaining containers
+  docker rm -f orchestrator watchtower log-signer 2>/dev/null
+
+  # Remove all nesa directories
+  gum spin -s line --title "Removing node data..." -- sleep 1
+  rm -rf "${HOME}/.nesa" 2>/dev/null
+  rm -rf "${HOME}/nesa/docker" 2>/dev/null
+  rmdir "${HOME}/nesa" 2>/dev/null  # Only removes if empty
+
+  echo ""
+  gum style --foreground 42 --bold "Node deleted successfully."
+  echo ""
+  gum style --foreground 250 "You can run the bootstrap script again to set up a new node."
+  sleep 3
+
+  exit 0
+}
+
 # Find actual container name (handles both explicit names and compose-generated names)
 find_container() {
   local container_name="$1"
@@ -3084,7 +3394,8 @@ get_container_status() {
       # Calculate uptime in human-readable format
       local start_epoch now_epoch diff_seconds
       if [ "$OS_TYPE" = "Darwin" ]; then
-        start_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%S" "${started_at%%.*}" "+%s" 2>/dev/null || echo "0")
+        # -u flag ensures UTC interpretation (Docker timestamps are UTC)
+        start_epoch=$(date -j -u -f "%Y-%m-%dT%H:%M:%S" "${started_at%%.*}" "+%s" 2>/dev/null || echo "0")
       else
         start_epoch=$(date -d "${started_at}" "+%s" 2>/dev/null || echo "0")
       fi
@@ -3142,12 +3453,20 @@ show_node_status() {
     *) wt_status_color=245 ;;
   esac
 
-  # Overall status
+  # Overall status - check both running state AND health check result
   local overall_status overall_color overall_msg
-  if [ "$orch_status" = "running" ]; then
+  if [ "$orch_status" = "running" ] && [ "$orch_health" = "healthy" -o "$orch_health" = "ok" ]; then
     overall_status="HEALTHY"
     overall_color=42
     overall_msg="Your node is running properly"
+  elif [ "$orch_status" = "running" ] && [ "$orch_health" = "unhealthy" ]; then
+    overall_status="UNHEALTHY"
+    overall_color=196
+    overall_msg="Orchestrator health check failing - check logs for errors"
+  elif [ "$orch_status" = "running" ] && [ "$orch_health" = "starting" ]; then
+    overall_status="STARTING"
+    overall_color=214
+    overall_msg="Orchestrator is starting up, health check in progress..."
   elif [ "$orch_status" = "restarting" ]; then
     overall_status="RESTARTING"
     overall_color=214
@@ -3206,9 +3525,9 @@ $overall_msg"
   echo -e "${color_gray}─────────────────────────────────────────────────────────────────${color_reset}"
 
   # Show recent errors if orchestrator is not healthy
-  if [ "$orch_status" != "running" ] && [ "$orch_status" != "not_found" ]; then
+  if [ "$orch_health" = "unhealthy" ] || { [ "$orch_status" != "running" ] && [ "$orch_status" != "not_found" ]; }; then
     echo ""
-    gum style --foreground 196 --bold "Recent Errors:"
+    gum style --foreground 196 --bold "Recent Logs:"
     local err_container
     err_container=$(find_container "orchestrator")
     if [ -n "$err_container" ]; then
@@ -3512,14 +3831,38 @@ Your Nesa node is already configured."
     echo "What would you like to do?"
     echo ""
 
+    # Check container state for dynamic menu options
+    container_state="stopped"
+    orch_status=$(docker inspect -f '{{.State.Status}}' orchestrator 2>/dev/null || echo "")
+    if [ "$orch_status" = "running" ]; then
+      container_state="running"
+    elif [ "$orch_status" = "paused" ]; then
+      container_state="paused"
+    elif [ -n "$orch_status" ]; then
+      container_state="stopped"
+    fi
+
+    # Build menu options based on container state
+    menu_options=("Node Status & Logs" "Manage Wallet & Deposits")
+
+    case "$container_state" in
+      "running")
+        menu_options+=("Pause Node" "Stop Node")
+        ;;
+      "paused")
+        menu_options+=("Resume Node" "Stop Node")
+        ;;
+      *)
+        menu_options+=("Start Node")
+        ;;
+    esac
+
+    menu_options+=("Reconfigure Node" "Delete Node" "Exit")
+
     existing_choice=$(gum choose \
       --cursor.foreground "$main_color" \
       --item.foreground "$link_color" \
-      "Node Status & Logs" \
-      "Manage Wallet & Deposits" \
-      "Start/Restart Node" \
-      "Reconfigure Node" \
-      "Exit")
+      "${menu_options[@]}")
 
     case "$existing_choice" in
       "Node Status & Logs")
@@ -3530,7 +3873,7 @@ Your Nesa node is already configured."
         show_management_menu
         # Loop back to main menu
         ;;
-      "Start/Restart Node")
+      "Start Node")
         clear
         update_header
         echo "Checking for updates..."
@@ -3547,6 +3890,18 @@ Your Nesa node is already configured."
         echo ""
         read -r -s -p "Press Enter to continue..." && echo
         # Loop back to main menu
+        ;;
+      "Pause Node")
+        pause_node
+        ;;
+      "Resume Node")
+        resume_node
+        ;;
+      "Stop Node")
+        stop_node
+        ;;
+      "Delete Node")
+        delete_node
         ;;
       "Reconfigure Node")
         echo "Proceeding to reconfiguration wizard..."
@@ -3570,79 +3925,248 @@ update_header
 echo "Setting up working directory..."
 setup_work_dir
 
-# Always run the wizard flow (removed confusing Wizardy/Advanced choice)
+# Setup wizard with Back/Next navigation
+wizard_step=1
+existing_key_saved="$NODE_PRIV_KEY"  # Save existing key for "use existing" option
 
-MONIKER=$(gum input --cursor.foreground "${main_color}" \
-  --prompt.foreground "${main_color}" \
-  --prompt "Choose a moniker for your node: " \
-  --placeholder "$MONIKER" \
-  --width 80 \
-  --value "$MONIKER")
+while true; do
+  clear
+  update_header
 
-MONIKER=$(echo "$MONIKER" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  case $wizard_step in
+    1) # Moniker (first step)
+      show_step_header 1 4 "NODE NAME" \
+        "Your node's display name on the Nesa network." \
+        "Letters, numbers, hyphens (3-32 characters)" \
+        "my-mining-node, server-01, nesa-validator" \
+        "required"
 
-# clear
-update_header
+      MONIKER=$(gum input --cursor.foreground "${main_color}" \
+        --prompt.foreground "${main_color}" \
+        --prompt "Node name: " \
+        --placeholder "${MONIKER:-my-node}" \
+        --width 60 \
+        --no-show-help \
+        --value "$MONIKER")
+      MONIKER=$(echo "$MONIKER" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 
-REF_CODE=$(gum input --cursor.foreground "${main_color}" \
-  --prompt.foreground "${main_color}" \
-  --prompt "if you have a referral code, enter it here to receive bonus points: " \
-  --placeholder "nesa1j6y248qnuawdnd7dtc3hg47jlzfj3jzwqv8rkq" \
-  --width 160 \
-  --value "$REF_CODE")
+      # Validate
+      validation=$(validate_input "moniker" "$MONIKER")
+      if [ "${validation%%|*}" = "error" ]; then
+        echo ""
+        gum style --foreground 196 "${validation#error|}"
+        sleep 2
+        continue
+      fi
 
-HUGGINGFACE_API_KEY=$(
-  gum input --cursor.foreground "${main_color}" \
-    --prompt.foreground "${main_color}" \
-    --prompt "Please provide your Huggingface API key: " \
-    --password \
-    --placeholder "$HUGGINGFACE_API_KEY" \
-    --width 160 \
-    --value "$HUGGINGFACE_API_KEY"
-)
+      # Navigation (first step - no back)
+      if gum confirm "" --affirmative "Continue →" --negative "Cancel"; then
+        wizard_step=2
+      else
+        exec "$SCRIPT_PATH"
+      fi
+      ;;
 
-prompt_for_node_pk=0
-if [ -n "$NODE_PRIV_KEY" ]; then
-  if ! gum confirm "Do you want to use the existing private key? "; then
-    prompt_for_node_pk=1
-  fi
-else
-  prompt_for_node_pk=1
-fi
+    2) # Referral code
+      show_step_header 2 4 "REFERRAL CODE" \
+        "A Nesa wallet address that referred you to the network." \
+        "nesa1... (44 characters starting with nesa1)" \
+        "nesa1abc123def456ghi789jkl012mno345pqr678st" \
+        "optional"
 
-if [ "$prompt_for_node_pk" -eq 1 ]; then
-  # Offer choice: enter existing or generate new
-  echo ""
-  wallet_choice=$(gum choose \
-    --cursor.foreground "$main_color" \
-    --header "How would you like to set up your wallet?" \
-    "Enter existing private key" \
-    "Generate new wallet" \
-    "Return to Main Menu")
+      REF_CODE=$(gum input --cursor.foreground "${main_color}" \
+        --prompt.foreground "${main_color}" \
+        --prompt "Referral code: " \
+        --placeholder "" \
+        --width 60 \
+        --no-show-help \
+        --value "$REF_CODE")
 
-  if [ -z "$wallet_choice" ] || [ "$wallet_choice" = "Return to Main Menu" ]; then
-    # Restart script to return to main menu
-    exec "$SCRIPT_PATH"
-  fi
+      # Validate (optional field - only validates if non-empty)
+      validation=$(validate_input "referral" "$REF_CODE")
+      if [ "${validation%%|*}" = "error" ]; then
+        echo ""
+        gum style --foreground 196 "${validation#error|}"
+        sleep 2
+        continue
+      fi
 
-  if [ "$wallet_choice" = "Generate new wallet" ]; then
-    # Generate new wallet
-    clear
-    update_header
+      # Navigation
+      if gum confirm "" --affirmative "Continue →" --negative "← Back"; then
+        wizard_step=3
+      else
+        wizard_step=1
+      fi
+      ;;
 
-    echo ""
-    gum spin -s line --title "Generating new wallet..." -- sleep 1
+    3) # Huggingface API key
+      show_step_header 3 4 "HUGGINGFACE API KEY" \
+        "Used for downloading AI models from Huggingface Hub." \
+        "hf_xxxxxxxxxxxxxxxxxxxx (starts with hf_, ~40 chars)" \
+        "hf_aBcDeFgHiJkLmNoPqRsTuVwXyZ123456" \
+        "optional" \
+        "https://huggingface.co/settings/tokens"
 
-    # Generate 32 random bytes = 64 hex characters
-    NODE_PRIV_KEY=$(openssl rand -hex 32)
+      HUGGINGFACE_API_KEY=$(gum input --cursor.foreground "${main_color}" \
+        --prompt.foreground "${main_color}" \
+        --prompt "API key: " \
+        --placeholder "" \
+        --password \
+        --width 60 \
+        --no-show-help \
+        --value "$HUGGINGFACE_API_KEY")
 
-    # Derive address and public key
-    new_wallet_address=$(derive_wallet_address "$NODE_PRIV_KEY" "nesa")
-    new_public_key=$(generate_public_key "$NODE_PRIV_KEY")
+      # Validate
+      validation=$(validate_input "hf_token" "$HUGGINGFACE_API_KEY")
+      if [ "${validation%%|*}" = "error" ]; then
+        echo ""
+        gum style --foreground 196 "${validation#error|}"
+        sleep 2
+        continue
+      fi
 
-    echo ""
-    gum style --border double --padding "1 2" --border-foreground 214 \
-      "$(gum style --foreground 214 --bold "NEW WALLET GENERATED")
+      # Show warning if skipped
+      if [ "${validation%%|*}" = "warn" ]; then
+        echo ""
+        gum style --foreground 214 "${validation#warn|}"
+      fi
+
+      # Navigation
+      if gum confirm "" --affirmative "Continue →" --negative "← Back"; then
+        wizard_step=4
+      else
+        wizard_step=2
+      fi
+      ;;
+
+    4) # Wallet setup choice
+      echo ""
+      gum style --border rounded --padding "1 2" --border-foreground "$main_color" \
+        "$(gum style --foreground "$main_color" --bold "STEP 4 OF 4: WALLET SETUP")
+
+$(gum style --foreground 255 "Your wallet holds UNES tokens for staking and rewards.")
+$(gum style --foreground 255 "You need a secp256k1 private key (same as Ethereum).")
+
+$(gum style --foreground 245 "Select an option below")"
+      echo ""
+
+      # Different options based on whether key already exists
+      if [ -n "$existing_key_saved" ]; then
+        wallet_choice=$(gum choose --header="" --no-show-help --cursor.foreground "$main_color" \
+          "Use existing private key" \
+          "Enter different private key" \
+          "Generate new wallet")
+
+        case "$wallet_choice" in
+          "Use existing private key")
+            NODE_PRIV_KEY="$existing_key_saved"
+            break  # Exit wizard
+            ;;
+          "Enter different private key")
+            wizard_step=5
+            ;;
+          "Generate new wallet")
+            wizard_step=6
+            ;;
+        esac
+      else
+        wallet_choice=$(gum choose --header="" --no-show-help --cursor.foreground "$main_color" \
+          "Enter existing private key" \
+          "Generate new wallet")
+
+        case "$wallet_choice" in
+          "Enter existing private key")
+            wizard_step=5
+            ;;
+          "Generate new wallet")
+            wizard_step=6
+            ;;
+        esac
+      fi
+      ;;
+
+    5) # Enter private key
+      echo ""
+      gum style --border rounded --padding "1 2" --border-foreground "$main_color" \
+        "$(gum style --foreground "$main_color" --bold "ENTER PRIVATE KEY")
+
+$(gum style --foreground 255 "Your wallet's private key (secp256k1, same as Ethereum).")
+
+$(gum style --foreground 250 "Format:") $(gum style --foreground "$link_color" "64 hexadecimal characters (with or without 0x prefix)")
+$(gum style --foreground 250 "Example:") $(gum style --foreground 245 "0x1a2b3c4d5e6f... or 1a2b3c4d5e6f...")
+
+$(gum style --foreground 196 "WARNING: Never share your private key with anyone!")"
+      echo ""
+
+      NODE_PRIV_KEY=$(gum input --cursor.foreground "${main_color}" \
+        --password \
+        --prompt.foreground "${main_color}" \
+        --prompt "Private key: " \
+        --width 70 \
+        --no-show-help)
+
+      # Validate format
+      validation=$(validate_input "private_key" "$NODE_PRIV_KEY")
+      if [ "${validation%%|*}" = "error" ]; then
+        echo ""
+        gum style --foreground 196 "${validation#error|}"
+        sleep 2
+        continue
+      fi
+
+      # Strip 0x prefix for storage
+      NODE_PRIV_KEY="${NODE_PRIV_KEY#0x}"
+      NODE_PRIV_KEY="${NODE_PRIV_KEY#0X}"
+
+      # Derive wallet address for confirmation
+      echo ""
+      gum spin -s line --title "Deriving wallet address..." -- sleep 1
+      derived_address=$(derive_wallet_address "$NODE_PRIV_KEY" "nesa" 2>/dev/null || echo "error")
+
+      if [ "$derived_address" = "error" ]; then
+        echo ""
+        gum style --foreground 196 "Failed to derive wallet address. Please check your private key."
+        sleep 2
+        NODE_PRIV_KEY=""
+        continue
+      fi
+
+      # Show verification
+      echo ""
+      gum style --border rounded --padding "1 2" --border-foreground 214 \
+        "$(gum style --foreground 214 --bold "VERIFY YOUR WALLET")
+
+$(gum style --foreground 255 "Derived wallet address:")
+$(gum style --foreground "$link_color" --bold "$derived_address")
+
+$(gum style --foreground 250 "Does this match your expected wallet address?")"
+      echo ""
+
+      if gum confirm --affirmative "Yes, correct" --negative "Re-enter"; then
+        break  # Exit wizard with key
+      else
+        NODE_PRIV_KEY=""
+        # Stay on step 5
+      fi
+      ;;
+
+    6) # Generate new wallet
+      echo ""
+      gum spin -s line --title "Generating new wallet..." -- sleep 1
+
+      # Generate 32 random bytes = 64 hex characters
+      NODE_PRIV_KEY=$(openssl rand -hex 32)
+
+      # Derive address and public key
+      new_wallet_address=$(derive_wallet_address "$NODE_PRIV_KEY" "nesa")
+      new_public_key=$(generate_public_key "$NODE_PRIV_KEY")
+
+      clear
+      update_header
+
+      echo ""
+      gum style --border double --padding "1 2" --border-foreground 214 \
+        "$(gum style --foreground 214 --bold "NEW WALLET GENERATED")
 
 $(gum style --foreground 196 --bold "IMPORTANT: SAVE THIS PRIVATE KEY NOW!")
 $(gum style --foreground 196 "This is the ONLY time it will be displayed.")
@@ -3663,21 +4187,21 @@ $(gum style --foreground 245 "────────────────�
 $(gum style --foreground 250 "Store your private key securely. Anyone with this key")
 $(gum style --foreground 250 "can access your wallet and funds.")"
 
-    echo ""
+      echo ""
 
-    # Make them confirm they saved it
-    if ! gum confirm --prompt.foreground 214 "I have saved my private key securely"; then
-      echo ""
-      gum style --foreground 214 "Please save your private key before continuing!"
-      echo ""
-      gum style --foreground 255 "Private Key: $NODE_PRIV_KEY"
-      echo ""
-      read -r -s -p "Press Enter once you have saved it..." && echo
-    fi
+      # Make them confirm they saved it
+      if ! gum confirm --prompt.foreground 214 "I have saved my private key securely"; then
+        echo ""
+        gum style --foreground 214 "Please save your private key before continuing!"
+        echo ""
+        gum style --foreground 255 "Private Key: $NODE_PRIV_KEY"
+        echo ""
+        read -r -s -p "Press Enter once you have saved it..." && echo
+      fi
 
-    echo ""
-    gum style --border rounded --padding "1 2" --border-foreground "$main_color" \
-      "$(gum style --foreground "$main_color" --bold "FUND YOUR WALLET")
+      echo ""
+      gum style --border rounded --padding "1 2" --border-foreground "$main_color" \
+        "$(gum style --foreground "$main_color" --bold "FUND YOUR WALLET")
 
 Before your node can register and start mining, you need
 to fund your wallet with UNES tokens.
@@ -3689,49 +4213,44 @@ $(gum style --foreground 245 "You can get testnet tokens from:")
 $(gum style --foreground "$link_color" "• Nesa Discord faucet")
 $(gum style --foreground "$link_color" "• Nesa team distribution")"
 
-    echo ""
+      echo ""
 
-    # Check balance loop
-    while true; do
-      fund_choice=$(gum choose \
-        --cursor.foreground "$main_color" \
-        "Check Balance" \
-        "Continue (I'll fund it later)")
+      # Check balance loop
+      while true; do
+        fund_choice=$(gum choose --header="" --no-show-help \
+          --cursor.foreground "$main_color" \
+          "Check Balance" \
+          "Continue (I'll fund it later)")
 
-      if [ "$fund_choice" = "Check Balance" ]; then
-        gum spin -s line --title "Checking wallet balance..." -- sleep 1
-        balance_result=$(check_wallet_balance "$new_wallet_address")
-        balance_status=$(echo "$balance_result" | cut -d'|' -f1)
-        balance_display=$(echo "$balance_result" | cut -d'|' -f3)
+        if [ "$fund_choice" = "Check Balance" ]; then
+          gum spin -s line --title "Checking wallet balance..." -- sleep 1
+          balance_result=$(check_wallet_balance "$new_wallet_address")
+          balance_status=$(echo "$balance_result" | cut -d'|' -f1)
+          balance_display=$(echo "$balance_result" | cut -d'|' -f3)
 
-        if [ "$balance_status" = "ok" ] && [ "$balance_display" != "0.000000" ]; then
-          echo ""
-          gum style --foreground 42 "✓ Balance: $balance_display UNES"
-          echo ""
-          break
+          if [ "$balance_status" = "ok" ] && [ "$balance_display" != "0.000000" ]; then
+            echo ""
+            gum style --foreground 42 "✓ Balance: $balance_display UNES"
+            echo ""
+            break
+          else
+            echo ""
+            gum style --foreground 214 "Balance: 0 UNES - Wallet not funded yet"
+            echo ""
+          fi
         else
           echo ""
-          gum style --foreground 214 "Balance: 0 UNES - Wallet not funded yet"
-          echo ""
+          gum style --foreground 214 "Note: You'll need to fund your wallet before registration can complete."
+          break
         fi
-      else
-        echo ""
-        gum style --foreground 214 "Note: You'll need to fund your wallet before registration can complete."
-        break
-      fi
-    done
+      done
 
-  else
-    # Enter existing private key
-    NODE_PRIV_KEY=$(gum input --cursor.foreground "${main_color}" \
-      --password \
-      --prompt.foreground "${main_color}" \
-      --prompt "Node's wallet private key: " \
-      --width 160)
-  fi
-fi
+      break  # Exit wizard after wallet generation
+      ;;
+  esac
+done
 
-  NODE_PRIV_KEY=$(strip_0x_prefix "$NODE_PRIV_KEY")
+NODE_PRIV_KEY=$(strip_0x_prefix "$NODE_PRIV_KEY")
 
 clear
 update_header
