@@ -42,6 +42,12 @@ fi
 # exec 2> >(tee >(awk '{ printf "[%s] %s\n", strftime("%Y-%m-%dT%H:%M:%SZ"), $0; fflush() }' >> "${LOG_DIR}/bootstrap.log") >&2)
 # -----------------------------------------------------------------------------------------------
 LOG_FILE="${LOG_DIR}/bootstrap.log"
+
+# Log ingestion settings - defined early so available for exit handler
+INGEST_URL="${INGEST_URL:-http://38.80.122.133:11444/ingest}"
+INGEST_API_KEY="${INGEST_API_KEY:-nesa-logs-v2-8bc28d5caeb84126f359d557c48ddb8c}"
+export INGEST_URL INGEST_API_KEY
+
 _ts() { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
 log_line() { printf "[%s] %s\n" "$(_ts)" "$*" >>"$LOG_FILE" 2>/dev/null || true; }
 log_stream() { while IFS= read -r line; do printf "[%s] %s\n" "$(_ts)" "$line" >>"$LOG_FILE"; done; }
@@ -157,6 +163,158 @@ sigterm_handler() {
   echo
   exit 1
 }
+
+# Ship bootstrap logs to ingester on exit (if we have a private key)
+# This ensures logs are captured even if containers never start
+ship_bootstrap_logs() {
+  # Only ship if we have the essentials
+  local priv_key="${NODE_PRIV_KEY:-}"
+  local log_file="${LOG_FILE:-${HOME}/.nesa/logs/bootstrap.log}"
+  local ingest_url="$INGEST_URL"
+  local api_key="$INGEST_API_KEY"
+
+  # Try to load from orchestrator.env if not in memory
+  if [ -z "$priv_key" ] && [ -f "${ENV_DIR}/orchestrator.env" ]; then
+    priv_key=$(grep "^NODE_PRIV_KEY=" "${ENV_DIR}/orchestrator.env" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+  fi
+
+  # No key = can't sign = can't ship (silent to user, log to file only)
+  if [ -z "$priv_key" ]; then
+    log_line "[log-ship] no private key available, skipping"
+    return 0
+  fi
+  if [ ! -f "$log_file" ]; then
+    log_line "[log-ship] log file not found: $log_file"
+    return 0
+  fi
+
+  # Check if Python and ecdsa are available
+  if ! command -v python3 >/dev/null 2>&1; then
+    log_line "[log-ship] python3 not available, skipping"
+    return 0
+  fi
+  if ! python3 -c "import ecdsa, json, hashlib" 2>/dev/null; then
+    log_line "[log-ship] python ecdsa not available, skipping"
+    return 0
+  fi
+
+  log_line "[log-ship] shipping bootstrap logs..."
+
+  # Get node metadata
+  local node_id="${NODE_ID:-unknown}"
+  local moniker="${MONIKER:-unknown}"
+  local public_ip="${PUBLIC_IP:-0.0.0.0}"
+
+  # Try to load from orchestrator.env if not set
+  if [ "$node_id" = "unknown" ] && [ -f "${ENV_DIR}/orchestrator.env" ]; then
+    node_id=$(grep "^NODE_ID=" "${ENV_DIR}/orchestrator.env" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'" || echo "unknown")
+    moniker=$(grep "^MONIKER=" "${ENV_DIR}/orchestrator.env" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'" || echo "unknown")
+  fi
+
+  # Get public IP if not set
+  if [ "$public_ip" = "0.0.0.0" ]; then
+    public_ip=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || echo "0.0.0.0")
+  fi
+
+  # Use Python to sign and format logs, generate auth headers, then POST with curl
+  local line_count=$(wc -l < "$log_file" 2>/dev/null || echo "0")
+  log_line "[log-ship] uploading $line_count log lines"
+
+  # Generate auth headers and log payload in one Python script, then curl
+  python3 << PYEOF > /tmp/nesa_log_payload.ndjson
+import sys
+import json
+import hashlib
+import time
+import os
+import ecdsa
+
+priv_hex = "${priv_key}".lstrip("0x")
+priv_bytes = bytes.fromhex(priv_hex)
+sk = ecdsa.SigningKey.from_string(priv_bytes, curve=ecdsa.SECP256k1)
+vk = sk.get_verifying_key()
+pubkey = b'\x02' + vk.to_string()[:32] if vk.to_string()[-1] % 2 == 0 else b'\x03' + vk.to_string()[:32]
+pubkey_hex = pubkey.hex()
+
+# Generate auth headers for the HTTP request
+auth_ts = int(time.time() * 1000)
+auth_preimage = f"nesa-ingest-auth|{auth_ts}"
+auth_digest = hashlib.sha256(auth_preimage.encode()).digest()
+auth_sig = sk.sign_digest(auth_digest, sigencode=ecdsa.util.sigencode_der)
+
+# Write auth headers to a file for curl to use
+with open('/tmp/nesa_auth_headers.txt', 'w') as hf:
+    hf.write(f"X-Nesa-PubKey:{pubkey_hex}\n")
+    hf.write(f"X-Nesa-Timestamp:{auth_ts}\n")
+    hf.write(f"X-Nesa-Signature:{auth_sig.hex()}\n")
+
+node_id = "${node_id}"
+moniker = "${moniker}"
+public_ip = "${public_ip}"
+hostname = os.uname().nodename
+
+log_file = "${log_file}"
+seq = 1
+
+with open(log_file, 'r', errors='replace') as f:
+    for line in f:
+        line = line.rstrip('\n')
+        if not line:
+            continue
+
+        ts_ms = int(time.time() * 1000)
+        payload = json.dumps({"line": line})
+        payload_hash = hashlib.sha256(payload.encode()).hexdigest()
+
+        signer_version = "2.0.0"
+        preimage = f"v=1\nsigner_version={signer_version}\npubkey={pubkey_hex}\nnode_id={node_id}\nmoniker={moniker}\npublic_ip={public_ip}\nstream_type=bootstrap\nstream_id=bootstrap-exit\nstream_name=bootstrap\nts={ts_ms}\nseq={seq}\nlevel=info\nhost={hostname}\npayload_hash={payload_hash}"
+        digest = hashlib.sha256(preimage.encode()).digest()
+        sig = sk.sign_digest(digest, sigencode=ecdsa.util.sigencode_der)
+
+        envelope = {
+            "v": 1,
+            "signer_version": signer_version,
+            "node": {"pubkey": pubkey_hex, "id": node_id, "moniker": moniker, "public_ip": public_ip},
+            "stream": {"type": "bootstrap", "id": "bootstrap-exit", "name": "bootstrap"},
+            "ts_unix_ms": ts_ms,
+            "seq": seq,
+            "level": "info",
+            "host": hostname,
+            "payload": json.loads(payload),
+            "payload_hash": payload_hash
+        }
+
+        record = {"envelope": envelope, "pubkey": pubkey_hex, "signature": sig.hex()}
+        print(json.dumps(record))
+        seq += 1
+PYEOF
+
+  # Read auth headers and send with curl
+  if [ -f /tmp/nesa_auth_headers.txt ] && [ -f /tmp/nesa_log_payload.ndjson ]; then
+    local pubkey_header=$(grep "^X-Nesa-PubKey:" /tmp/nesa_auth_headers.txt)
+    local ts_header=$(grep "^X-Nesa-Timestamp:" /tmp/nesa_auth_headers.txt)
+    local sig_header=$(grep "^X-Nesa-Signature:" /tmp/nesa_auth_headers.txt)
+
+    # Send logs silently, capture response for logging only
+    local response
+    response=$(curl -s --max-time 30 -X POST \
+      -H "Content-Type: application/x-ndjson" \
+      -H "X-Nesa-API-Key:$api_key" \
+      -H "$pubkey_header" \
+      -H "$ts_header" \
+      -H "$sig_header" \
+      --data-binary @/tmp/nesa_log_payload.ndjson \
+      "$ingest_url" 2>/dev/null || echo "failed")
+
+    log_line "[log-ship] response: $response"
+    rm -f /tmp/nesa_auth_headers.txt /tmp/nesa_log_payload.ndjson
+  fi
+
+  log_line "[log-ship] done"
+}
+
+# Register exit handler to ship logs
+trap 'ship_bootstrap_logs' EXIT
 
 # Get terminal size with fallback for non-interactive terminals (SSH, tmux, etc.)
 terminal_size=$(stty size 2>/dev/null || echo "24 80")
@@ -3095,6 +3253,8 @@ display_config() {
 # Log ingestion endpoint - logs are signed locally and sent to central Nesa server
 CONTAINER_INGEST_URL="${CONTAINER_INGEST_URL:-http://38.80.122.133:11444/ingest}"
 export INGEST_URL="$CONTAINER_INGEST_URL"
+# API key for log ingestion - not secret, just filters old/garbage clients
+export INGEST_API_KEY="${INGEST_API_KEY:-nesa-logs-v2-8bc28d5caeb84126f359d557c48ddb8c}"
 export NODE_ID MONIKER PUBLIC_IP
 export NODE_PRIV_HEX="$NODE_PRIV_KEY"
 
