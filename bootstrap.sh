@@ -500,7 +500,7 @@ check_nvidia_toolkit() {
 
   if [ "$toolkit_installed" = true ]; then
     log_line "NVIDIA GPU and container toolkit detected"
-    echo "✓ NVIDIA GPU detected with container toolkit installed"
+    echo "NVIDIA GPU detected with container toolkit installed"
     return 0
   fi
 
@@ -883,9 +883,28 @@ $(gum style --foreground 255 "$description")
 $(gum style --foreground 250 "Format:") $(gum style --foreground "$link_color" "$format_info")
 $(gum style --foreground 250 "Example:") $(gum style --foreground 245 "$example")$help_text
 
-$req_text
+$req_text"
+  echo ""
+}
 
-$(gum style --foreground 245 "Press Enter to continue")"
+# Show summary of what user entered after input
+# Usage: show_input_summary "field_label" "value" "required|optional"
+show_input_summary() {
+  local label="$1"
+  local value="$2"
+  local required="$3"
+
+  echo ""
+  if [ -n "$value" ]; then
+    # Has value - show what they entered
+    gum style --foreground 245 "$label: $(gum style --foreground 255 --bold "$value")"
+  elif [ "$required" = "required" ]; then
+    # Empty but required
+    gum style --foreground 214 "No value entered (required)"
+  else
+    # Empty but optional - that's fine
+    gum style --foreground 245 "$label: (skipped)"
+  fi
   echo ""
 }
 
@@ -904,6 +923,12 @@ wizard_nav() {
       "Continue" \
       "Cancel Setup"
   fi
+}
+
+# Return to main menu (restarts script)
+# Script will show main menu if config exists, or wizard if not
+return_to_main_menu() {
+  exec "$SCRIPT_PATH"
 }
 
 # Validate wizard input - returns "ok" or "error|message"
@@ -1597,7 +1622,7 @@ print(derive_node_id('$private_key'))
 "
 }
 
-# Check wallet balance (UNES tokens)
+# Check wallet balance (unes)
 check_wallet_balance() {
   local wallet_address="$1"
   local lcd_url="${LCD_URL}"
@@ -1624,7 +1649,7 @@ check_wallet_balance() {
     return 1
   fi
 
-  # Extract UNES balance
+  # Extract unes balance
   local unes_balance
   unes_balance=$(echo "$json_data" | jq -r '.balances[] | select(.denom == "unes") | .amount' 2>/dev/null)
 
@@ -1632,11 +1657,11 @@ check_wallet_balance() {
     unes_balance="0"
   fi
 
-  # Convert from microunes to UNES (use awk for consistent formatting with leading zeros)
-  local unes_display
-  unes_display=$(safe_divide "$unes_balance" 1000000 6)
+  # Convert unes to NES for display (1 NES = 1,000,000 unes)
+  local nes_display
+  nes_display=$(safe_divide "$unes_balance" 1000000 6)
 
-  echo "ok|$unes_balance|$unes_display"
+  echo "ok|$unes_balance|$nes_display"
 }
 
 # Check miner deposit status
@@ -1703,7 +1728,7 @@ check_miner_deposit() {
     *) bond_status="unknown" ;;
   esac
 
-  # Convert from microunes to UNES (use awk for consistent formatting with leading zeros)
+  # Convert unes to NES for display (1 NES = 1,000,000 unes)
   local deposit_display
   deposit_display=$(safe_divide "$deposit_amount" 1000000 6)
 
@@ -2044,11 +2069,12 @@ PYEOF
 # Includes retry logic for sequence mismatch errors
 submit_miner_deposit() {
   local node_id="$1"
-  local amount_microunes="$2"
+  local amount_unes="$2"
   local private_key="$3"
   local max_retries="${4:-5}"
 
-  log_line "Submitting miner deposit: node_id=$node_id, amount=${amount_microunes}unes (max_retries=$max_retries)"
+  local amount_nes_log=$(safe_divide "$amount_unes" 1000000 6)
+  log_line "Submitting miner deposit: node_id=$node_id, amount=${amount_nes_log} NES (max_retries=$max_retries)"
 
   ${NESA_PYTHON_CMD:-python3} << PYEOF
 import sys
@@ -2075,7 +2101,7 @@ class MsgAddMinerDeposit(betterproto.Message):
     node_id: str = betterproto.string_field(2)
     amount: Coin = betterproto.message_field(3)
 
-def build_and_broadcast_tx(account, node_id, amount_microunes, lcd_url):
+def build_and_broadcast_tx(account, node_id, amount_unes, lcd_url):
     """Build and broadcast transaction, returns (success, result_msg)"""
     # Refresh account data to get latest sequence
     client = HTTPClient(api=lcd_url)
@@ -2093,7 +2119,7 @@ def build_and_broadcast_tx(account, node_id, amount_microunes, lcd_url):
     msg = MsgAddMinerDeposit(
         depositor=account.address,
         node_id=node_id,
-        amount=Coin(denom="unes", amount=amount_microunes)
+        amount=Coin(denom="unes", amount=amount_unes)
     )
 
     # Pack message into Any and add to transaction
@@ -2132,7 +2158,7 @@ def build_and_broadcast_tx(account, node_id, amount_microunes, lcd_url):
 try:
     private_key = "${private_key}"
     node_id = "${node_id}"
-    amount_microunes = "${amount_microunes}"
+    amount_unes = "${amount_unes}"
     max_retries = int(${max_retries})
     lcd_url = "${LCD_URL}"
 
@@ -2157,7 +2183,7 @@ try:
     # Retry loop for sequence mismatch
     last_error = ""
     for attempt in range(max_retries):
-        success, result = build_and_broadcast_tx(account, node_id, amount_microunes, lcd_url)
+        success, result = build_and_broadcast_tx(account, node_id, amount_unes, lcd_url)
 
         if success:
             print(f"success|{result}")
@@ -2193,15 +2219,8 @@ add_miner_deposit() {
   local node_id="$1"
   local amount_unes="$2"
 
-  log_line "Add miner deposit: node_id=$node_id, amount=${amount_unes} UNES"
-
-  # Convert UNES to microunes
-  local amount_microunes
-  if command -v bc >/dev/null 2>&1; then
-    amount_microunes=$(echo "$amount_unes * 1000000" | bc | cut -d. -f1)
-  else
-    amount_microunes=$(safe_multiply "$amount_unes" 1000000 0)
-  fi
+  local amount_nes_log=$(safe_divide "$amount_unes" 1000000 6)
+  log_line "Add miner deposit: node_id=$node_id, amount=${amount_nes_log} NES"
 
   # Load private key from config
   if [ -z "$NODE_PRIV_HEX" ]; then
@@ -2216,21 +2235,23 @@ add_miner_deposit() {
     return 1
   fi
 
-  # Submit the transaction
+  # Submit the transaction (unes is the base denomination, no conversion needed)
   local result
-  result=$(submit_miner_deposit "$node_id" "$amount_microunes" "$NODE_PRIV_HEX")
+  result=$(submit_miner_deposit "$node_id" "$amount_unes" "$NODE_PRIV_HEX")
 
   echo "$result"
 }
 
 # Interactive deposit flow with nice UI
-# Returns: 0 if deposit successful or skipped, 1 if failed
+# Returns: 0 if deposit successful or skipped, 1 if failed, 2 if user chose to defer
+# $4: skip_if_meets_minimum - if "true", return immediately when deposit already meets minimum
 show_deposit_flow() {
   local wallet_address="$1"
   local node_id="$2"
   local private_key="$3"
+  local skip_if_meets_minimum="${4:-false}"
 
-  log_line "Starting deposit flow for wallet=$wallet_address node=$node_id"
+  log_line "Starting deposit flow for wallet=$wallet_address node=$node_id skip_if_meets_minimum=$skip_if_meets_minimum"
 
   # Fetch all required data
   echo ""
@@ -2240,7 +2261,7 @@ show_deposit_flow() {
   local balance_result
   balance_result=$(check_wallet_balance "$wallet_address")
   local balance_status=$(echo "$balance_result" | cut -d'|' -f1)
-  local balance_microunes=$(echo "$balance_result" | cut -d'|' -f2)
+  local balance_unes=$(echo "$balance_result" | cut -d'|' -f2)
   local balance_display=$(echo "$balance_result" | cut -d'|' -f3)
 
   if [ "$balance_status" != "ok" ]; then
@@ -2252,7 +2273,7 @@ show_deposit_flow() {
   local params_result
   params_result=$(check_min_deposit)
   local params_status=$(echo "$params_result" | cut -d'|' -f1)
-  local min_deposit_microunes=$(echo "$params_result" | cut -d'|' -f2)
+  local min_deposit_unes=$(echo "$params_result" | cut -d'|' -f2)
   local min_deposit_display=$(echo "$params_result" | cut -d'|' -f3)
 
   if [ "$params_status" != "ok" ]; then
@@ -2264,29 +2285,30 @@ show_deposit_flow() {
   local deposit_result
   deposit_result=$(check_miner_deposit "$node_id")
   local deposit_status=$(echo "$deposit_result" | cut -d'|' -f1)
-  local current_deposit_microunes=$(echo "$deposit_result" | cut -d'|' -f2)
+  local current_deposit_unes=$(echo "$deposit_result" | cut -d'|' -f2)
   local current_deposit_display=$(echo "$deposit_result" | cut -d'|' -f3)
   local bond_status=$(echo "$deposit_result" | cut -d'|' -f4)
 
   if [ "$deposit_status" != "ok" ]; then
-    current_deposit_microunes="0"
-    current_deposit_display="0.000000"
+    current_deposit_unes="0"
+    current_deposit_display="0"
     bond_status="not_registered"
   fi
 
   # Calculate shortfall
-  local shortfall_microunes=$((min_deposit_microunes - current_deposit_microunes))
-  if [ "$shortfall_microunes" -lt 0 ]; then
-    shortfall_microunes=0
+  local shortfall_unes=$((min_deposit_unes - current_deposit_unes))
+  if [ "$shortfall_unes" -lt 0 ]; then
+    shortfall_unes=0
   fi
 
+  # Convert shortfall to NES for display
   local shortfall_display
-  shortfall_display=$(safe_divide "$shortfall_microunes" 1000000 6)
+  shortfall_display=$(safe_divide "$shortfall_unes" 1000000 6)
 
   # Check if miner is not registered - auto-register node and miner
   if [ "$bond_status" = "not_registered" ]; then
     # First check if wallet is funded - can't register without funds
-    if [ "$balance_microunes" -eq 0 ]; then
+    if [ "$balance_unes" -eq 0 ]; then
       echo ""
       gum style --border rounded --padding "1 2" --border-foreground 196 \
         "$(gum style --foreground 196 --bold "WALLET NOT FUNDED")
@@ -2296,10 +2318,11 @@ Your wallet needs funds before you can register your node.
 $(gum style --foreground 43 "Wallet Address:")
 $(gum style --foreground 69 "$wallet_address")
 
-Please send at least $(gum style --foreground 214 "$min_deposit_display UNES") to this address.
+Please send at least $(gum style --foreground 214 "$min_deposit_display NES") to this address.
 This will cover your minimum deposit plus transaction fees.
 
-$(gum style --foreground 245 "You can get testnet tokens from the Nesa faucet or another wallet.")"
+$(gum style --foreground 245 "Get testnet tokens from the Nesa Playground faucet:")
+$(gum style --foreground "$link_color" "https://beta.nesa.ai/faucet")"
       echo ""
 
       # Loop until wallet is funded
@@ -2307,22 +2330,22 @@ $(gum style --foreground 245 "You can get testnet tokens from the Nesa faucet or
         local action
         action=$(gum choose --cursor.foreground 42 \
           "Check balance again" \
-          "Return to Main Menu")
+          "← Back")
 
-        if [ "$action" = "Return to Main Menu" ]; then
-          return 1
+        if [ -z "$action" ] || [ "$action" = "← Back" ]; then
+          return 2  # User chose to go back, not an error
         fi
 
         echo ""
         gum spin -s line --title "Checking wallet balance..." -- sleep 1
         balance_result=$(check_wallet_balance "$wallet_address")
         balance_status=$(echo "$balance_result" | cut -d'|' -f1)
-        balance_microunes=$(echo "$balance_result" | cut -d'|' -f2)
+        balance_unes=$(echo "$balance_result" | cut -d'|' -f2)
         balance_display=$(echo "$balance_result" | cut -d'|' -f3)
 
-        if [ "$balance_status" = "ok" ] && [ "$balance_microunes" -gt 0 ]; then
+        if [ "$balance_status" = "ok" ] && [ "$balance_unes" -gt 0 ]; then
           echo ""
-          gum style --foreground 42 "Wallet funded. Balance: ${balance_display} UNES"
+          gum style --foreground 42 "Wallet funded. Balance: ${balance_display} NES"
           echo ""
           sleep 1
           break
@@ -2450,22 +2473,30 @@ $(gum style --foreground 245 "You can get testnet tokens from the Nesa faucet or
     # Refresh deposit info after registration
     deposit_result=$(check_miner_deposit "$node_id")
     deposit_status=$(echo "$deposit_result" | cut -d'|' -f1)
-    current_deposit_microunes=$(echo "$deposit_result" | cut -d'|' -f2)
+    current_deposit_unes=$(echo "$deposit_result" | cut -d'|' -f2)
     current_deposit_display=$(echo "$deposit_result" | cut -d'|' -f3)
     bond_status=$(echo "$deposit_result" | cut -d'|' -f4)
   fi
 
-  # Check if deposit meets minimum - offer to add more anyway
+  # Check if deposit meets minimum
   local deposit_meets_minimum=false
-  if [ "$current_deposit_microunes" -ge "$min_deposit_microunes" ]; then
+  if [ "$current_deposit_unes" -ge "$min_deposit_unes" ]; then
     deposit_meets_minimum=true
+    # If skip_if_meets_minimum is true, skip deposit screen entirely
+    if [ "$skip_if_meets_minimum" = "true" ]; then
+      echo ""
+      gum style --foreground 42 "Deposit status: ${current_deposit_display} NES (meets minimum of ${min_deposit_display} NES)"
+      sleep 1
+      return 0
+    fi
   fi
 
-  # Calculate gas fee estimate (fixed)
-  local gas_fee_microunes=1000
-  local gas_fee_display="0.001000"
+  # Calculate gas fee estimate (fixed at 1000 unes = 0.001 NES)
+  local gas_fee_unes=1000
+  local gas_fee_display
+  gas_fee_display=$(safe_divide "$gas_fee_unes" 1000000 6)
 
-  # Show deposit screen
+  # Show deposit screen (only if deposit doesn't meet minimum)
   while true; do
     clear
     update_header
@@ -2483,7 +2514,7 @@ $(gum style --foreground 245 "You can get testnet tokens from the Nesa faucet or
       local status_text="MINER DEPOSIT"
       local status_desc="Your node requires a deposit to participate in the network."
       local amount_needed_line="
-  $(gum style --foreground 214 "Shortfall:")          ${shortfall_display} UNES"
+  $(gum style --foreground 214 "Shortfall:")          ${shortfall_display} NES"
     fi
 
     gum style --border rounded --padding "1 2" --border-foreground "$status_color" \
@@ -2494,28 +2525,28 @@ $(gum style --foreground 250 "$status_desc")
   $(gum style --foreground 245 "─────────────────────────────────────────────────────────────────")
 
   $(gum style --foreground 43 "Wallet:")             ${wallet_address}
-  $(gum style --foreground 43 "Balance:")            $(gum style --bold "${balance_display} UNES")
+  $(gum style --foreground 43 "Balance:")            $(gum style --bold "${balance_display} NES")
 
   $(gum style --foreground 245 "─────────────────────────────────────────────────────────────────")
 
-  $(gum style --foreground 43 "Minimum Required:")   ${min_deposit_display} UNES
-  $(gum style --foreground 43 "Current Deposit:")    $(gum style --foreground $status_color "${current_deposit_display} UNES")
+  $(gum style --foreground 43 "Minimum Required:")   ${min_deposit_display} NES
+  $(gum style --foreground 43 "Current Deposit:")    $(gum style --foreground $status_color "${current_deposit_display} NES")
   $(gum style --foreground 43 "Bond Status:")        $(gum style --foreground $status_color "${bond_status}")${amount_needed_line}
 
   $(gum style --foreground 245 "─────────────────────────────────────────────────────────────────")
 
-  $(gum style --foreground 250 "Gas Fee:")            ~${gas_fee_display} UNES
+  $(gum style --foreground 250 "Gas Fee:")            ~${gas_fee_display} NES
 
 $(gum style --foreground 245 --italic "Deposits are held in escrow and can be withdrawn after
 a 7-day unbonding period.")"
 
     echo ""
 
-    # Determine default amount
+    # Determine default amount (in NES)
     local default_amount
     if [ "$deposit_meets_minimum" = true ]; then
-      default_amount="0.001"
-    elif [ "$shortfall_microunes" -gt 0 ]; then
+      default_amount="0.001"  # 0.001 NES = 1000 unes
+    elif [ "$shortfall_unes" -gt 0 ]; then
       default_amount="$shortfall_display"
     else
       default_amount="$min_deposit_display"
@@ -2526,16 +2557,16 @@ a 7-day unbonding period.")"
       local action_choice
       action_choice=$(gum choose --cursor.foreground 42 \
         "Add more deposit" \
-        "Return to Main Menu")
+        "← Back")
 
-      if [ -z "$action_choice" ] || [ "$action_choice" = "Return to Main Menu" ]; then
+      if [ -z "$action_choice" ] || [ "$action_choice" = "← Back" ]; then
         return 0
       fi
     fi
 
     local deposit_amount
     deposit_amount=$(gum input \
-      --placeholder "Enter deposit amount in UNES" \
+      --placeholder "Enter deposit amount in NES" \
       --value "$default_amount" \
       --prompt "Deposit amount: " \
       --prompt.foreground "$main_color")
@@ -2559,50 +2590,50 @@ a 7-day unbonding period.")"
       continue
     fi
 
-    # Convert to microunes for validation
-    local deposit_microunes
+    # Convert user input from NES to unes (1 NES = 1,000,000 unes)
+    local deposit_unes
     if command -v bc >/dev/null 2>&1; then
-      deposit_microunes=$(echo "$deposit_amount * 1000000" | bc | cut -d. -f1)
+      deposit_unes=$(echo "$deposit_amount * 1000000" | bc | cut -d. -f1)
     else
-      deposit_microunes=$(safe_multiply "$deposit_amount" 1000000 0)
+      deposit_unes=$(safe_multiply "$deposit_amount" 1000000 0)
     fi
 
     # Validate amount
-    local total_needed=$((deposit_microunes + gas_fee_microunes))
+    local total_needed=$((deposit_unes + gas_fee_unes))
 
-    if [ "$deposit_microunes" -le 0 ]; then
+    if [ -z "$deposit_unes" ] || [ "$deposit_unes" -le 0 ]; then
       gum style --foreground 196 "Amount must be greater than 0"
       sleep 2
       continue
     fi
 
-    if [ "$total_needed" -gt "$balance_microunes" ]; then
-      gum style --foreground 196 "Insufficient balance. You need ${deposit_amount} UNES + ~${gas_fee_display} UNES for gas."
-      gum style --foreground 196 "Your balance: ${balance_display} UNES"
+    if [ "$total_needed" -gt "$balance_unes" ]; then
+      gum style --foreground 196 "Insufficient balance. You need ${deposit_amount} NES + ~${gas_fee_display} NES for gas."
+      gum style --foreground 196 "Your balance: ${balance_display} NES"
       sleep 3
       continue
     fi
 
     # Calculate final deposit
-    local final_deposit_microunes=$((current_deposit_microunes + deposit_microunes))
+    local final_deposit_unes=$((current_deposit_unes + deposit_unes))
     local final_deposit_display
-    final_deposit_display=$(safe_divide "$final_deposit_microunes" 1000000 6)
+    final_deposit_display=$(safe_divide "$final_deposit_unes" 1000000 6)
 
-    local remaining_balance_microunes=$((balance_microunes - total_needed))
+    local remaining_balance_unes=$((balance_unes - total_needed))
     local remaining_balance_display
-    remaining_balance_display=$(safe_divide "$remaining_balance_microunes" 1000000 6)
+    remaining_balance_display=$(safe_divide "$remaining_balance_unes" 1000000 6)
 
     local meets_minimum="Below minimum"
     local meets_color=196
-    if [ "$final_deposit_microunes" -ge "$min_deposit_microunes" ]; then
+    if [ "$final_deposit_unes" -ge "$min_deposit_unes" ]; then
       meets_minimum="OK"
       meets_color=42
     fi
 
     # Calculate total cost for display
-    local total_cost_microunes=$((deposit_microunes + gas_fee_microunes))
+    local total_cost_unes=$((deposit_unes + gas_fee_unes))
     local total_cost_display
-    total_cost_display=$(safe_divide "$total_cost_microunes" 1000000 6)
+    total_cost_display=$(safe_divide "$total_cost_unes" 1000000 6)
 
     # Show confirmation
     echo ""
@@ -2611,26 +2642,26 @@ a 7-day unbonding period.")"
 
   $(gum style --foreground 245 "─────────────────────────────────────────────────────────────────")
 
-  $(gum style --foreground 250 "Deposit Amount:")     ${deposit_amount} UNES
-  $(gum style --foreground 250 "Gas Fee:")            ~${gas_fee_display} UNES
+  $(gum style --foreground 250 "Deposit Amount:")     ${deposit_amount} NES
+  $(gum style --foreground 250 "Gas Fee:")            ~${gas_fee_display} NES
   $(gum style --foreground 245 "─────────────────────────────────────────────────────────────────")
-  $(gum style --foreground 43 "Total Cost:")          $(gum style --bold "${total_cost_display} UNES")
+  $(gum style --foreground 43 "Total Cost:")          $(gum style --bold "${total_cost_display} NES")
 
   $(gum style --foreground 245 "─────────────────────────────────────────────────────────────────")
 
   $(gum style --foreground 250 "After Transaction:")
-  $(gum style --foreground 250 "Your Deposit:")       ${final_deposit_display} UNES  $(gum style --foreground $meets_color "[$meets_minimum]")
-  $(gum style --foreground 250 "Remaining Balance:")  ${remaining_balance_display} UNES"
+  $(gum style --foreground 250 "Your Deposit:")       ${final_deposit_display} NES  $(gum style --foreground $meets_color "[$meets_minimum]")
+  $(gum style --foreground 250 "Remaining Balance:")  ${remaining_balance_display} NES"
 
     echo ""
 
     # Confirm - different options if already meets minimum
     local confirm
     if [ "$deposit_meets_minimum" = true ]; then
-      confirm=$(gum choose --cursor.foreground 42 "Submit Deposit" "Change Amount" "Cancel")
+      confirm=$(gum choose --cursor.foreground 42 "Submit Deposit" "Change Amount" "← Back")
     else
       # Deposit is required, but allow back to menu to fund wallet first
-      confirm=$(gum choose --cursor.foreground 42 "Submit Deposit" "Change Amount" "Return to Main Menu")
+      confirm=$(gum choose --cursor.foreground 42 "Submit Deposit" "Change Amount" "← Back")
     fi
 
     case "$confirm" in
@@ -2638,9 +2669,9 @@ a 7-day unbonding period.")"
         echo ""
         gum spin -s line --title "Submitting deposit transaction..." -- sleep 1
 
-        # Actually submit the transaction
+        # Actually submit the transaction (pass unes value to chain)
         local tx_result
-        tx_result=$(add_miner_deposit "$node_id" "$deposit_amount")
+        tx_result=$(add_miner_deposit "$node_id" "$deposit_unes")
 
         local tx_status=$(echo "$tx_result" | cut -d'|' -f1)
         local tx_data=$(echo "$tx_result" | cut -d'|' -f2-)
@@ -2653,20 +2684,20 @@ a 7-day unbonding period.")"
   $(gum style --foreground 250 "Transaction Hash:")
   $(gum style --foreground 69 "$tx_data")
 
-  Your deposit of ${deposit_amount} UNES has been submitted.
+  Your deposit of ${deposit_amount} NES has been submitted.
   It may take a few seconds to confirm on-chain."
           echo ""
 
           # Update the deposit status for next iteration
           deposit_meets_minimum=true
-          current_deposit_microunes=$final_deposit_microunes
+          current_deposit_unes=$final_deposit_unes
           current_deposit_display=$final_deposit_display
 
           sleep 2
           # Ask if they want to add more
           local more_choice
-          more_choice=$(gum choose --cursor.foreground 42 "Add more deposit" "Return to Main Menu")
-          if [ -z "$more_choice" ] || [ "$more_choice" = "Return to Main Menu" ]; then
+          more_choice=$(gum choose --cursor.foreground 42 "Add more deposit" "← Back")
+          if [ -z "$more_choice" ] || [ "$more_choice" = "← Back" ]; then
             return 0
           fi
           continue
@@ -2685,7 +2716,7 @@ a 7-day unbonding period.")"
           fail_choice=$(gum choose --cursor.foreground 42 \
             "Try again" \
             "Change amount" \
-            "Return to Main Menu")
+            "← Back")
 
           case "$fail_choice" in
             "Try again")
@@ -2694,7 +2725,7 @@ a 7-day unbonding period.")"
             "Change amount")
               continue
               ;;
-            "Return to Main Menu")
+            "← Back")
               return 0
               ;;
             *)
@@ -2706,12 +2737,8 @@ a 7-day unbonding period.")"
       "Change Amount")
         continue
         ;;
-      "Cancel")
-        # Only available when deposit already meets minimum
-        return 0
-        ;;
-      "Return to Main Menu")
-        # Allow user to go back and fund wallet or do other things first
+      "← Back")
+        # Go back to previous screen
         return 0
         ;;
       *)
@@ -2750,21 +2777,15 @@ check_min_deposit() {
   local miner_unbond=$(echo "$json_data" | jq -r '.params.miner_unbonding_period // "0s"')
   local orch_unbond=$(echo "$json_data" | jq -r '.params.orchestrator_unbonding_period // "0s"')
 
-  # Convert to UNES for display (using awk for consistent formatting with leading zeros)
+  # Convert unes to NES for display (1 NES = 1,000,000 unes)
   local miner_min_display
   local orch_min_display
   miner_min_display=$(safe_divide "$miner_min_amount" 1000000 6)
   orch_min_display=$(safe_divide "$orch_min_amount" 1000000 6)
 
-  # Normalize denom for display (unes -> UNES)
-  local miner_denom_display="UNES"
-  local orch_denom_display="UNES"
-  if [ "$miner_min_denom" != "unes" ]; then
-    miner_denom_display=$(echo "$miner_min_denom" | tr '[:lower:]' '[:upper:]')
-  fi
-  if [ "$orch_min_denom" != "unes" ]; then
-    orch_denom_display=$(echo "$orch_min_denom" | tr '[:lower:]' '[:upper:]')
-  fi
+  # Display as NES
+  local miner_denom_display="NES"
+  local orch_denom_display="NES"
 
   echo "ok|$miner_min_amount|$miner_min_display|$miner_denom_display|$orch_min_amount|$orch_min_display|$orch_denom_display|$miner_unbond|$orch_unbond"
 }
@@ -2841,8 +2862,7 @@ Node ID: ${node_id:-"(not available - start your node first)"}"
           gum style --border double --padding "1 2" --border-foreground "$main_color" \
             "$(gum style --foreground "$main_color" --bold "Wallet Balance")
 
-Balance: $(gum style --foreground "$main_color" --bold "$balance_display UNES")
-         ($balance_micro microunes)"
+Balance: $(gum style --foreground "$main_color" --bold "$balance_display NES")"
         else
           echo "Error: Failed to fetch wallet balance."
           if [ -n "$error_msg" ]; then
@@ -2890,8 +2910,7 @@ Balance: $(gum style --foreground "$main_color" --bold "$balance_display UNES")
             "$(gum style --foreground "$main_color" --bold "Miner Deposit Status")
 
 Node ID: $node_id
-Deposit: $(gum style --foreground "$main_color" --bold "$deposit_display UNES")
-         ($deposit_micro microunes)
+Deposit: $(gum style --foreground "$main_color" --bold "$deposit_display NES")
 Status:  $(gum style --foreground "$status_color" --bold "$bond_status")"
         else
           echo "Error: Failed to fetch miner deposit status."
@@ -3874,6 +3893,48 @@ Your Nesa node is already configured."
         # Loop back to main menu
         ;;
       "Start Node")
+        # Check if node meets requirements before starting
+        if [ "$chain_status" = "needs_registration" ]; then
+          echo ""
+          gum style --border rounded --padding "1 2" --border-foreground 196 \
+            "$(gum style --foreground 196 --bold "CANNOT START NODE")
+
+Your node is $(gum style --foreground 196 "not registered on the blockchain").
+
+Please go to $(gum style --foreground "$main_color" "Manage Wallet & Deposits") to:
+  1. Fund your wallet with NES
+  2. Complete node and miner registration"
+          echo ""
+          read -r -s -p "Press Enter to continue..." && echo
+          continue
+        elif [ "$chain_status" = "needs_miner" ]; then
+          echo ""
+          gum style --border rounded --padding "1 2" --border-foreground 196 \
+            "$(gum style --foreground 196 --bold "CANNOT START NODE")
+
+Your node is registered but $(gum style --foreground 196 "miner is not registered").
+
+Please go to $(gum style --foreground "$main_color" "Manage Wallet & Deposits") to:
+  1. Ensure your wallet is funded
+  2. Complete miner registration"
+          echo ""
+          read -r -s -p "Press Enter to continue..." && echo
+          continue
+        elif [ "$chain_status" = "needs_deposit" ]; then
+          echo ""
+          gum style --border rounded --padding "1 2" --border-foreground 196 \
+            "$(gum style --foreground 196 --bold "CANNOT START NODE")
+
+Your deposit is $(gum style --foreground 196 "below the minimum requirement").
+
+Please go to $(gum style --foreground "$main_color" "Manage Wallet & Deposits") to:
+  1. Check the minimum deposit requirements
+  2. Add more deposit to meet the minimum"
+          echo ""
+          read -r -s -p "Press Enter to continue..." && echo
+          continue
+        fi
+
         clear
         update_header
         echo "Checking for updates..."
@@ -3950,20 +4011,26 @@ while true; do
         --value "$MONIKER")
       MONIKER=$(echo "$MONIKER" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 
+      # Show what user entered
+      show_input_summary "Node name" "$MONIKER" "required"
+
       # Validate
       validation=$(validate_input "moniker" "$MONIKER")
       if [ "${validation%%|*}" = "error" ]; then
+        gum style --foreground 196 "  ${validation#error|}"
         echo ""
-        gum style --foreground 196 "${validation#error|}"
-        sleep 2
-        continue
+        if gum confirm "" --affirmative "Try Again" --negative "Cancel"; then
+          continue
+        else
+          return_to_main_menu
+        fi
       fi
 
       # Navigation (first step - no back)
       if gum confirm "" --affirmative "Continue →" --negative "Cancel"; then
         wizard_step=2
       else
-        exec "$SCRIPT_PATH"
+        return_to_main_menu
       fi
       ;;
 
@@ -3982,21 +4049,35 @@ while true; do
         --no-show-help \
         --value "$REF_CODE")
 
+      # Show what user entered
+      show_input_summary "Referral code" "$REF_CODE" "optional"
+
       # Validate (optional field - only validates if non-empty)
       validation=$(validate_input "referral" "$REF_CODE")
       if [ "${validation%%|*}" = "error" ]; then
+        gum style --foreground 196 "  ${validation#error|}"
         echo ""
-        gum style --foreground 196 "${validation#error|}"
-        sleep 2
-        continue
+        err_choice=$(gum choose --header="" --no-show-help --cursor.foreground "$main_color" \
+          "Try Again" \
+          "← Back" \
+          "Return to Main Menu")
+        case "$err_choice" in
+          "Try Again") continue ;;
+          "← Back") wizard_step=1; continue ;;
+          "Return to Main Menu"|"") return_to_main_menu ;;
+        esac
       fi
 
       # Navigation
-      if gum confirm "" --affirmative "Continue →" --negative "← Back"; then
-        wizard_step=3
-      else
-        wizard_step=1
-      fi
+      nav_choice=$(gum choose --header="" --no-show-help --cursor.foreground "$main_color" \
+        "Continue →" \
+        "← Back" \
+        "Return to Main Menu")
+      case "$nav_choice" in
+        "Continue →") wizard_step=3 ;;
+        "← Back") wizard_step=1 ;;
+        "Return to Main Menu"|"") return_to_main_menu ;;
+      esac
       ;;
 
     3) # Huggingface API key
@@ -4016,27 +4097,46 @@ while true; do
         --no-show-help \
         --value "$HUGGINGFACE_API_KEY")
 
+      # Show what user entered (masked for security)
+      if [ -n "$HUGGINGFACE_API_KEY" ]; then
+        masked_key="${HUGGINGFACE_API_KEY:0:6}$( printf '*%.0s' {1..20} )${HUGGINGFACE_API_KEY: -4}"
+        show_input_summary "API key" "$masked_key" "optional"
+      else
+        show_input_summary "API key" "" "optional"
+      fi
+
       # Validate
       validation=$(validate_input "hf_token" "$HUGGINGFACE_API_KEY")
       if [ "${validation%%|*}" = "error" ]; then
+        gum style --foreground 196 "  ${validation#error|}"
         echo ""
-        gum style --foreground 196 "${validation#error|}"
-        sleep 2
-        continue
+        err_choice=$(gum choose --header="" --no-show-help --cursor.foreground "$main_color" \
+          "Try Again" \
+          "← Back" \
+          "Return to Main Menu")
+        case "$err_choice" in
+          "Try Again") continue ;;
+          "← Back") wizard_step=2; continue ;;
+          "Return to Main Menu"|"") return_to_main_menu ;;
+        esac
       fi
 
       # Show warning if skipped
       if [ "${validation%%|*}" = "warn" ]; then
+        gum style --foreground 214 "  ${validation#warn|}"
         echo ""
-        gum style --foreground 214 "${validation#warn|}"
       fi
 
       # Navigation
-      if gum confirm "" --affirmative "Continue →" --negative "← Back"; then
-        wizard_step=4
-      else
-        wizard_step=2
-      fi
+      nav_choice=$(gum choose --header="" --no-show-help --cursor.foreground "$main_color" \
+        "Continue →" \
+        "← Back" \
+        "Return to Main Menu")
+      case "$nav_choice" in
+        "Continue →") wizard_step=4 ;;
+        "← Back") wizard_step=2 ;;
+        "Return to Main Menu"|"") return_to_main_menu ;;
+      esac
       ;;
 
     4) # Wallet setup choice
@@ -4044,7 +4144,7 @@ while true; do
       gum style --border rounded --padding "1 2" --border-foreground "$main_color" \
         "$(gum style --foreground "$main_color" --bold "STEP 4 OF 4: WALLET SETUP")
 
-$(gum style --foreground 255 "Your wallet holds UNES tokens for staking and rewards.")
+$(gum style --foreground 255 "Your wallet holds NES for staking and rewards.")
 $(gum style --foreground 255 "You need a secp256k1 private key (same as Ethereum).")
 
 $(gum style --foreground 245 "Select an option below")"
@@ -4055,7 +4155,9 @@ $(gum style --foreground 245 "Select an option below")"
         wallet_choice=$(gum choose --header="" --no-show-help --cursor.foreground "$main_color" \
           "Use existing private key" \
           "Enter different private key" \
-          "Generate new wallet")
+          "Generate new wallet" \
+          "← Back" \
+          "Return to Main Menu")
 
         case "$wallet_choice" in
           "Use existing private key")
@@ -4068,11 +4170,19 @@ $(gum style --foreground 245 "Select an option below")"
           "Generate new wallet")
             wizard_step=6
             ;;
+          "← Back")
+            wizard_step=3
+            ;;
+          "Return to Main Menu"|"")
+            return_to_main_menu
+            ;;
         esac
       else
         wallet_choice=$(gum choose --header="" --no-show-help --cursor.foreground "$main_color" \
           "Enter existing private key" \
-          "Generate new wallet")
+          "Generate new wallet" \
+          "← Back" \
+          "Return to Main Menu")
 
         case "$wallet_choice" in
           "Enter existing private key")
@@ -4080,6 +4190,12 @@ $(gum style --foreground 245 "Select an option below")"
             ;;
           "Generate new wallet")
             wizard_step=6
+            ;;
+          "← Back")
+            wizard_step=3
+            ;;
+          "Return to Main Menu"|"")
+            return_to_main_menu
             ;;
         esac
       fi
@@ -4105,13 +4221,28 @@ $(gum style --foreground 196 "WARNING: Never share your private key with anyone!
         --width 70 \
         --no-show-help)
 
+      # Show what user entered (masked)
+      if [ -n "$NODE_PRIV_KEY" ]; then
+        masked_pk="${NODE_PRIV_KEY:0:4}$( printf '*%.0s' {1..20} )${NODE_PRIV_KEY: -4}"
+        show_input_summary "Private key" "$masked_pk" "required"
+      else
+        show_input_summary "Private key" "" "required"
+      fi
+
       # Validate format
       validation=$(validate_input "private_key" "$NODE_PRIV_KEY")
       if [ "${validation%%|*}" = "error" ]; then
+        gum style --foreground 196 "  ${validation#error|}"
         echo ""
-        gum style --foreground 196 "${validation#error|}"
-        sleep 2
-        continue
+        err_choice=$(gum choose --header="" --no-show-help --cursor.foreground "$main_color" \
+          "Try Again" \
+          "← Back" \
+          "Return to Main Menu")
+        case "$err_choice" in
+          "Try Again") continue ;;
+          "← Back") wizard_step=4; continue ;;
+          "Return to Main Menu"|"") return_to_main_menu ;;
+        esac
       fi
 
       # Strip 0x prefix for storage
@@ -4142,12 +4273,17 @@ $(gum style --foreground "$link_color" --bold "$derived_address")
 $(gum style --foreground 250 "Does this match your expected wallet address?")"
       echo ""
 
-      if gum confirm --affirmative "Yes, correct" --negative "Re-enter"; then
-        break  # Exit wizard with key
-      else
-        NODE_PRIV_KEY=""
-        # Stay on step 5
-      fi
+      verify_choice=$(gum choose --header="" --no-show-help --cursor.foreground "$main_color" \
+        "Yes, correct" \
+        "Re-enter" \
+        "← Back" \
+        "Return to Main Menu")
+      case "$verify_choice" in
+        "Yes, correct") break ;;  # Exit wizard with key
+        "Re-enter") NODE_PRIV_KEY="" ;;  # Stay on step 5
+        "← Back") wizard_step=4 ;;
+        "Return to Main Menu"|"") return_to_main_menu ;;
+      esac
       ;;
 
     6) # Generate new wallet
@@ -4204,23 +4340,24 @@ $(gum style --foreground 250 "can access your wallet and funds.")"
         "$(gum style --foreground "$main_color" --bold "FUND YOUR WALLET")
 
 Before your node can register and start mining, you need
-to fund your wallet with UNES tokens.
+to fund your wallet with NES.
 
 $(gum style --foreground "$main_color" "Send tokens to:")
 $(gum style --foreground 255 --bold "$new_wallet_address")
 
-$(gum style --foreground 245 "You can get testnet tokens from:")
-$(gum style --foreground "$link_color" "• Nesa Discord faucet")
-$(gum style --foreground "$link_color" "• Nesa team distribution")"
+$(gum style --foreground 245 "Get testnet tokens from the Nesa Playground faucet:")
+$(gum style --foreground "$link_color" "https://beta.nesa.ai/faucet")"
 
       echo ""
 
       # Check balance loop
+      go_back=false
       while true; do
         fund_choice=$(gum choose --header="" --no-show-help \
           --cursor.foreground "$main_color" \
           "Check Balance" \
-          "Continue (I'll fund it later)")
+          "Continue (I'll fund it later)" \
+          "← Back")
 
         if [ "$fund_choice" = "Check Balance" ]; then
           gum spin -s line --title "Checking wallet balance..." -- sleep 1
@@ -4228,16 +4365,19 @@ $(gum style --foreground "$link_color" "• Nesa team distribution")"
           balance_status=$(echo "$balance_result" | cut -d'|' -f1)
           balance_display=$(echo "$balance_result" | cut -d'|' -f3)
 
-          if [ "$balance_status" = "ok" ] && [ "$balance_display" != "0.000000" ]; then
+          if [ "$balance_status" = "ok" ] && [ "$balance_display" != "0" ]; then
             echo ""
-            gum style --foreground 42 "✓ Balance: $balance_display UNES"
+            gum style --foreground 42 "Balance: $balance_display NES"
             echo ""
             break
           else
             echo ""
-            gum style --foreground 214 "Balance: 0 UNES - Wallet not funded yet"
+            gum style --foreground 214 "Balance: 0 NES - Wallet not funded yet"
             echo ""
           fi
+        elif [ -z "$fund_choice" ] || [ "$fund_choice" = "← Back" ]; then
+          go_back=true
+          break
         else
           echo ""
           gum style --foreground 214 "Note: You'll need to fund your wallet before registration can complete."
@@ -4245,6 +4385,10 @@ $(gum style --foreground "$link_color" "• Nesa team distribution")"
         fi
       done
 
+      if [ "$go_back" = true ]; then
+        wizard_step=4
+        continue
+      fi
       break  # Exit wizard after wallet generation
       ;;
   esac
@@ -4272,7 +4416,17 @@ update_header
 
 display_config
 
-if ! gum confirm "Do you want to start the node with the above configuration? "; then
+echo ""
+echo "What would you like to do?"
+echo ""
+
+post_config_choice=$(gum choose \
+  --cursor.foreground "$main_color" \
+  --item.foreground "$link_color" \
+  "Start Node Now" \
+  "Return to Main Menu")
+
+if [ "$post_config_choice" != "Start Node Now" ]; then
   echo ""
   gum style --foreground "$main_color" "Configuration saved. Returning to main menu..."
   sleep 1
@@ -4288,8 +4442,19 @@ gum style --foreground "$main_color" --bold "Checking deposit status..."
 WALLET_ADDRESS=$(derive_wallet_address "$NODE_PRIV_KEY" "nesa")
 
 # Show deposit flow (handles checking and prompting if needed)
-# This will loop until deposit meets minimum or there's a critical error
-if ! show_deposit_flow "$WALLET_ADDRESS" "$NODE_ID" "$NODE_PRIV_KEY"; then
+# Returns: 0 = success, 1 = error, 2 = user chose to defer
+# Pass "true" to skip deposit screen if already meets minimum (user just wants to start node)
+show_deposit_flow "$WALLET_ADDRESS" "$NODE_ID" "$NODE_PRIV_KEY" "true"
+deposit_result=$?
+
+if [ "$deposit_result" -eq 2 ]; then
+  # User chose to fund later - go back to main menu without error
+  echo ""
+  gum style --foreground "$main_color" "Returning to main menu. You can fund your wallet and try again later."
+  sleep 2
+  exec "$SCRIPT_PATH"
+elif [ "$deposit_result" -eq 1 ]; then
+  # Actual error
   echo ""
   gum style --border rounded --padding "1 2" --border-foreground 196 \
     "$(gum style --foreground 196 --bold "DEPOSIT CHECK FAILED")
@@ -4315,28 +4480,37 @@ compose_up
 cd "$init_pwd" || return
 echo -e "Congratulations! Your $(gum style --foreground "$main_color" "nesa") node was successfully bootstrapped!"
 
-# Offer post-setup options
-echo ""
-echo "What would you like to do next?"
-echo ""
+# Offer post-setup options in a loop
+while true; do
+  echo ""
+  echo "What would you like to do next?"
+  echo ""
 
-post_setup_choice=$(gum choose \
-  --cursor.foreground "$main_color" \
-  --item.foreground "$link_color" \
-  "View Node Status & Logs" \
-  "Manage Wallet & Deposits" \
-  "Exit")
+  post_setup_choice=$(gum choose \
+    --cursor.foreground "$main_color" \
+    --item.foreground "$link_color" \
+    "View Node Status & Logs" \
+    "Manage Wallet & Deposits" \
+    "Return to Main Menu" \
+    "Exit")
 
-case "$post_setup_choice" in
-  "View Node Status & Logs")
-    show_status_and_logs_menu
-    ;;
-  "Manage Wallet & Deposits")
-    show_management_menu
-    ;;
-esac
-
-echo ""
-echo "You can run this script again anytime to manage your node, check status, and view logs."
-echo ""
-# set +x
+  case "$post_setup_choice" in
+    "View Node Status & Logs")
+      show_status_and_logs_menu
+      # Loop back to post-setup menu
+      ;;
+    "Manage Wallet & Deposits")
+      show_management_menu
+      # Loop back to post-setup menu
+      ;;
+    "Return to Main Menu")
+      exec "$SCRIPT_PATH"
+      ;;
+    "Exit"|"")
+      echo ""
+      echo "You can run this script again anytime to manage your node, check status, and view logs."
+      echo ""
+      exit 0
+      ;;
+  esac
+done
