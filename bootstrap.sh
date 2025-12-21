@@ -43,14 +43,18 @@ fi
 # -----------------------------------------------------------------------------------------------
 LOG_FILE="${LOG_DIR}/bootstrap.log"
 
+# Truncate log file at session start - keeps only current session, prevents unbounded growth
+# (silently skip if directory doesn't exist yet - will be created later or already exists)
+: > "$LOG_FILE" 2>/dev/null || true
+
 # Log ingestion settings - defined early so available for exit handler
 INGEST_URL="${INGEST_URL:-http://38.80.122.133:11444/ingest}"
 INGEST_API_KEY="${INGEST_API_KEY:-nesa-logs-v2-8bc28d5caeb84126f359d557c48ddb8c}"
 export INGEST_URL INGEST_API_KEY
 
 _ts() { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
-log_line() { printf "[%s] %s\n" "$(_ts)" "$*" >>"$LOG_FILE" 2>/dev/null || true; }
-log_stream() { while IFS= read -r line; do printf "[%s] %s\n" "$(_ts)" "$line" >>"$LOG_FILE"; done; }
+log_line() { { printf "[%s] %s\n" "$(_ts)" "$*" >>"$LOG_FILE"; } 2>/dev/null || true; }
+log_stream() { while IFS= read -r line; do { printf "[%s] %s\n" "$(_ts)" "$line" >>"$LOG_FILE"; } 2>/dev/null; done; }
 run_and_log() {
   local title="$1"
   shift
@@ -2625,6 +2629,7 @@ $(gum style --foreground "$link_color" "https://beta.nesa.ai/faucet")"
 
     echo ""
     gum style --foreground 42 --bold "Registration complete. Now let's add your deposit."
+    log_line "[CHAIN] Node and miner registration completed successfully"
     echo ""
     read -p "> Press Enter to continue..."
 
@@ -2835,6 +2840,7 @@ a 7-day unbonding period.")"
         local tx_data=$(echo "$tx_result" | cut -d'|' -f2-)
 
         if [ "$tx_status" = "success" ]; then
+          log_line "[CHAIN] Deposit successful - amount: ${deposit_amount} NES, tx: $tx_data"
           echo ""
           gum style --border rounded --padding "1 2" --border-foreground 42 \
             "$(gum style --foreground 42 --bold "DEPOSIT SUCCESSFUL")
@@ -2860,6 +2866,7 @@ a 7-day unbonding period.")"
           fi
           continue
         else
+          log_line "[CHAIN] Deposit failed - error: $tx_data"
           echo ""
           gum style --border rounded --padding "1 2" --border-foreground 196 \
             "$(gum style --foreground 196 --bold "DEPOSIT FAILED")
@@ -3190,6 +3197,8 @@ save_to_env_file() {
   update_config_var "$orchestrator_env_file" "NESA_NODE_TYPE" "$NESA_NODE_TYPE"
   update_config_var "$orchestrator_env_file" "NODE_PRIV_KEY" "$NODE_PRIV_KEY"
   update_config_var "$orchestrator_env_file" "NODE_PRIV_HEX" "$NODE_PRIV_KEY"
+  update_config_var "$orchestrator_env_file" "INGEST_API_KEY" "$INGEST_API_KEY"
+  update_config_var "$orchestrator_env_file" "INGEST_URL" "$INGEST_URL"
 
   # Save NODE_ID if available (so orchestrator doesn't regenerate)
   if [[ -n "$NODE_ID" && "$NODE_ID" != "pending..." ]]; then
@@ -3329,10 +3338,12 @@ compose_up() {
     --env-file "$base_env_file" \
     --env-file "$orchestrator_env_file" \
     up --pull always -d --wait || {
+      log_line "[ERROR] Docker Compose failed to start containers"
       echo "Error: Docker Compose failed to start."
       exit 1
     }
 
+  log_line "[DOCKER] Containers started successfully (${gpu_mode} mode)"
   echo ""
   echo "Docker Compose started successfully! (${gpu_mode})"
 }
@@ -3469,6 +3480,7 @@ $(gum style --foreground 196 "if you have not backed it up elsewhere.")"
   if [ "$confirm_text" != "DELETE" ]; then
     echo ""
     gum style --foreground 214 "Deletion cancelled. Returning to menu."
+    log_line "[ACTION] Node deletion cancelled by user (did not type DELETE)"
     sleep 2
     return 0
   fi
@@ -3482,9 +3494,15 @@ $(gum style --foreground 196 "if you have not backed it up elsewhere.")"
     "Are you absolutely sure?"; then
     echo ""
     gum style --foreground 214 "Deletion cancelled."
+    log_line "[ACTION] Node deletion cancelled at final confirmation"
     sleep 2
     return 0
   fi
+
+  log_line "[ACTION] Node deletion confirmed - removing all containers and data"
+
+  # Ship logs BEFORE deleting (since log file will be removed)
+  ship_bootstrap_logs
 
   echo ""
 
@@ -4045,16 +4063,19 @@ Your Nesa node is already configured."
 
     case "$existing_choice" in
       "Node Status & Logs")
+        log_line "[MENU] User selected: Node Status & Logs"
         show_status_and_logs_menu
         # Loop back to main menu
         ;;
       "Manage Wallet & Deposits")
+        log_line "[MENU] User selected: Manage Wallet & Deposits"
         show_management_menu
         # Loop back to main menu
         ;;
       "Start Node")
         # Check if node meets requirements before starting
         if [ "$chain_status" = "needs_registration" ]; then
+          log_line "[ERROR] Cannot start node - not registered on blockchain"
           echo ""
           gum style --border rounded --padding "1 2" --border-foreground 196 \
             "$(gum style --foreground 196 --bold "CANNOT START NODE")
@@ -4068,6 +4089,7 @@ Please go to $(gum style --foreground "$main_color" "Manage Wallet & Deposits") 
           read -r -s -p "Press Enter to continue..." && echo
           continue
         elif [ "$chain_status" = "needs_miner" ]; then
+          log_line "[ERROR] Cannot start node - miner not registered"
           echo ""
           gum style --border rounded --padding "1 2" --border-foreground 196 \
             "$(gum style --foreground 196 --bold "CANNOT START NODE")
@@ -4081,6 +4103,7 @@ Please go to $(gum style --foreground "$main_color" "Manage Wallet & Deposits") 
           read -r -s -p "Press Enter to continue..." && echo
           continue
         elif [ "$chain_status" = "needs_deposit" ]; then
+          log_line "[ERROR] Cannot start node - deposit below minimum requirement"
           echo ""
           gum style --border rounded --padding "1 2" --border-foreground 196 \
             "$(gum style --foreground 196 --bold "CANNOT START NODE")
@@ -4095,6 +4118,7 @@ Please go to $(gum style --foreground "$main_color" "Manage Wallet & Deposits") 
           continue
         fi
 
+        log_line "[ACTION] User selected: Start Node"
         clear
         update_header
         echo "Checking for updates..."
@@ -4103,8 +4127,10 @@ Please go to $(gum style --foreground "$main_color" "Manage Wallet & Deposits") 
           exit 1
         }
         git pull --quiet 2>/dev/null || true
+        log_line "[ACTION] Starting node containers..."
         echo "Starting node containers..."
         compose_up
+        log_line "[ACTION] Node containers started successfully"
         cd "$init_pwd" || exit
         echo ""
         echo -e "$(gum style --foreground "$main_color" "nesa") node containers started!"
@@ -4113,23 +4139,32 @@ Please go to $(gum style --foreground "$main_color" "Manage Wallet & Deposits") 
         # Loop back to main menu
         ;;
       "Pause Node")
+        log_line "[ACTION] User selected: Pause Node"
         pause_node
+        log_line "[ACTION] Node paused"
         ;;
       "Resume Node")
+        log_line "[ACTION] User selected: Resume Node"
         resume_node
+        log_line "[ACTION] Node resumed"
         ;;
       "Stop Node")
+        log_line "[ACTION] User selected: Stop Node"
         stop_node
+        log_line "[ACTION] Node stopped"
         ;;
       "Delete Node")
+        log_line "[ACTION] User selected: Delete Node"
         delete_node
         ;;
       "Reconfigure Node")
+        log_line "[ACTION] User selected: Reconfigure Node"
         echo "Proceeding to reconfiguration wizard..."
         sleep 1
         break  # Exit loop to continue to wizard
         ;;
       "Exit")
+        log_line "[ACTION] User selected: Exit"
         exit 0
         ;;
       *)
@@ -4177,6 +4212,7 @@ while true; do
       # Validate
       validation=$(validate_input "moniker" "$MONIKER")
       if [ "${validation%%|*}" = "error" ]; then
+        log_line "[ERROR] Moniker validation failed: ${validation#error|}"
         gum style --foreground 196 "  ${validation#error|}"
         echo ""
         if gum confirm "" --affirmative "Try Again" --negative "Cancel"; then
@@ -4188,6 +4224,7 @@ while true; do
 
       # Navigation (first step - no back)
       if gum confirm "" --affirmative "Continue →" --negative "Cancel"; then
+        log_line "[SETUP] Moniker set: $MONIKER"
         wizard_step=2
       else
         return_to_main_menu
@@ -4321,13 +4358,16 @@ $(gum style --foreground 245 "Select an option below")"
 
         case "$wallet_choice" in
           "Use existing private key")
+            log_line "[WALLET] User chose: Use existing private key"
             NODE_PRIV_KEY="$existing_key_saved"
             break  # Exit wizard
             ;;
           "Enter different private key")
+            log_line "[WALLET] User chose: Enter different private key"
             wizard_step=5
             ;;
           "Generate new wallet")
+            log_line "[WALLET] User chose: Generate new wallet"
             wizard_step=6
             ;;
           "← Back")
@@ -4346,9 +4386,11 @@ $(gum style --foreground 245 "Select an option below")"
 
         case "$wallet_choice" in
           "Enter existing private key")
+            log_line "[WALLET] User chose: Enter existing private key (import)"
             wizard_step=5
             ;;
           "Generate new wallet")
+            log_line "[WALLET] User chose: Generate new wallet"
             wizard_step=6
             ;;
           "← Back")
@@ -4392,6 +4434,7 @@ $(gum style --foreground 196 "WARNING: Never share your private key with anyone!
       # Validate format
       validation=$(validate_input "private_key" "$NODE_PRIV_KEY")
       if [ "${validation%%|*}" = "error" ]; then
+        log_line "[ERROR] Private key validation failed: ${validation#error|}"
         gum style --foreground 196 "  ${validation#error|}"
         echo ""
         err_choice=$(gum choose --header="" --no-show-help --cursor.foreground "$main_color" \
@@ -4415,6 +4458,7 @@ $(gum style --foreground 196 "WARNING: Never share your private key with anyone!
       derived_address=$(derive_wallet_address "$NODE_PRIV_KEY" "nesa" 2>/dev/null || echo "error")
 
       if [ "$derived_address" = "error" ]; then
+        log_line "[ERROR] Failed to derive wallet address from private key"
         echo ""
         gum style --foreground 196 "Failed to derive wallet address. Please check your private key."
         sleep 2
@@ -4439,7 +4483,9 @@ $(gum style --foreground 250 "Does this match your expected wallet address?")"
         "← Back" \
         "Return to Main Menu")
       case "$verify_choice" in
-        "Yes, correct") break ;;  # Exit wizard with key
+        "Yes, correct")
+          log_line "[WALLET] Private key imported - address: $derived_address"
+          break ;;  # Exit wizard with key
         "Re-enter") NODE_PRIV_KEY="" ;;  # Stay on step 5
         "← Back") wizard_step=4 ;;
         "Return to Main Menu"|"") return_to_main_menu ;;
@@ -4456,6 +4502,7 @@ $(gum style --foreground 250 "Does this match your expected wallet address?")"
       # Derive address and public key
       new_wallet_address=$(derive_wallet_address "$NODE_PRIV_KEY" "nesa")
       new_public_key=$(generate_public_key "$NODE_PRIV_KEY")
+      log_line "[WALLET] New wallet generated - address: $new_wallet_address"
 
       clear
       update_header
@@ -4487,6 +4534,7 @@ $(gum style --foreground 250 "can access your wallet and funds.")"
 
       # Make them confirm they saved it
       if ! gum confirm --prompt.foreground 214 "I have saved my private key securely"; then
+        log_line "[WALLET] User did not confirm key saved - showing key again"
         echo ""
         gum style --foreground 214 "Please save your private key before continuing!"
         echo ""
@@ -4494,6 +4542,7 @@ $(gum style --foreground 250 "can access your wallet and funds.")"
         echo ""
         read -r -s -p "Press Enter once you have saved it..." && echo
       fi
+      log_line "[WALLET] User confirmed private key saved"
 
       echo ""
       gum style --border rounded --padding "1 2" --border-foreground "$main_color" \
@@ -4569,6 +4618,8 @@ IS_DIST=False
 # This ensures NODE_ID is available before orchestrator starts
 ensure_node_id "$NODE_PRIV_KEY"
 
+log_line "[SETUP] Configuration complete - saving to env files"
+log_line "[SETUP] Node type: $NESA_NODE_TYPE, Miner type: $MINER_TYPE"
 save_to_env_file
 
 clear
@@ -4587,11 +4638,14 @@ post_config_choice=$(gum choose \
   "Return to Main Menu")
 
 if [ "$post_config_choice" != "Start Node Now" ]; then
+  log_line "[SETUP] User chose: Return to Main Menu (configuration saved)"
   echo ""
   gum style --foreground "$main_color" "Configuration saved. Returning to main menu..."
   sleep 1
   exec "$SCRIPT_PATH"  # Restart script to show main menu
 fi
+
+log_line "[SETUP] User chose: Start Node Now"
 
 # Check and handle deposit before starting containers
 log_line "[STAGE 5.5]: checking miner deposit"
@@ -4609,12 +4663,14 @@ deposit_result=$?
 
 if [ "$deposit_result" -eq 2 ]; then
   # User chose to fund later - go back to main menu without error
+  log_line "[SETUP] User deferred funding - returning to main menu"
   echo ""
   gum style --foreground "$main_color" "Returning to main menu. You can fund your wallet and try again later."
   sleep 2
   exec "$SCRIPT_PATH"
 elif [ "$deposit_result" -eq 1 ]; then
   # Actual error
+  log_line "[ERROR] Deposit check failed"
   echo ""
   gum style --border rounded --padding "1 2" --border-foreground 196 \
     "$(gum style --foreground 196 --bold "DEPOSIT CHECK FAILED")
@@ -4638,6 +4694,7 @@ log_line "[STAGE 6]: starting docker containers"
 compose_up
 
 cd "$init_pwd" || return
+log_line "[SETUP] Node bootstrap completed successfully - node is running"
 echo -e "Congratulations! Your $(gum style --foreground "$main_color" "nesa") node was successfully bootstrapped!"
 
 # Offer post-setup options in a loop
@@ -4656,17 +4713,21 @@ while true; do
 
   case "$post_setup_choice" in
     "View Node Status & Logs")
+      log_line "[MENU] Post-setup: View Node Status & Logs"
       show_status_and_logs_menu
       # Loop back to post-setup menu
       ;;
     "Manage Wallet & Deposits")
+      log_line "[MENU] Post-setup: Manage Wallet & Deposits"
       show_management_menu
       # Loop back to post-setup menu
       ;;
     "Return to Main Menu")
+      log_line "[MENU] Post-setup: Return to Main Menu"
       exec "$SCRIPT_PATH"
       ;;
     "Exit"|"")
+      log_line "[ACTION] User exited after successful setup"
       echo ""
       echo "You can run this script again anytime to manage your node, check status, and view logs."
       echo ""
