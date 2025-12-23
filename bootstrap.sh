@@ -331,6 +331,47 @@ prompt_height=${PROMPT_HEIGHT:-1}
 main_color=43
 link_color=69
 
+# Detect light/dark terminal background
+# COLORFGBG format: "fg;bg" - bg of 15, 7, or similar means light background
+# Also check common light terminal indicators
+detect_light_terminal() {
+  # Check COLORFGBG (set by some terminals like xterm, rxvt)
+  # Extract background value after the semicolon
+  if [[ -n "$COLORFGBG" ]]; then
+    local bg_color="${COLORFGBG##*;}"
+    case "$bg_color" in
+      15|7|6|9|10|11|12|14) return 0 ;;  # light background colors
+    esac
+  fi
+  # Check for known light terminal profiles
+  case "$KONSOLE_PROFILE_NAME" in
+    *[Ll]ight*|*[Ww]hite*|*Solarized*[Ll]ight*) return 0 ;;
+  esac
+  case "$ITERM_PROFILE" in
+    *[Ll]ight*|*[Ww]hite*|*Solarized*[Ll]ight*) return 0 ;;
+  esac
+  # Check if terminal background color is set and appears light
+  case "$TERMINAL_BACKGROUND" in
+    [Ww]hite*|[Ll]ight*) return 0 ;;
+  esac
+  return 1  # assume dark
+}
+
+# Define theme-aware colors
+if detect_light_terminal; then
+  dim_color=241      # dark grey - readable on white
+  muted_color=238    # darker grey for secondary text
+  text_color=236     # near-black for main descriptions
+  divider_color=250  # medium grey for dividers (visible on white)
+  note_color=243     # grey for notes
+else
+  dim_color=245      # light grey - readable on dark
+  muted_color=250    # lighter grey for secondary text
+  text_color=255     # near-white for main descriptions
+  divider_color=245  # grey for dividers
+  note_color=245     # grey for notes
+fi
+
 #
 # EARLY DEPENDENCY CHECKS - must run before any gum usage
 #
@@ -1027,23 +1068,23 @@ show_step_header() {
   if [ "$required" = "required" ]; then
     req_text=$(gum style --foreground 214 "This field is REQUIRED")
   else
-    req_text=$(gum style --foreground 245 "This field is OPTIONAL")
+    req_text=$(gum style --foreground "$dim_color" "This field is OPTIONAL")
   fi
 
   local help_text=""
   if [ -n "$help_link" ]; then
     help_text="
-$(gum style --foreground 250 "Get it at:") $(gum style --foreground "$link_color" "$help_link")"
+$(gum style --foreground "$muted_color" "Get it at:") $(gum style --foreground "$link_color" "$help_link")"
   fi
 
   echo ""
   gum style --border rounded --padding "1 2" --border-foreground "$main_color" \
     "$(gum style --foreground "$main_color" --bold "STEP $step_num OF $total_steps: $title")
 
-$(gum style --foreground 255 "$description")
+$(gum style --foreground "$text_color" "$description")
 
-$(gum style --foreground 250 "Format:") $(gum style --foreground "$link_color" "$format_info")
-$(gum style --foreground 250 "Example:") $(gum style --foreground 245 "$example")$help_text
+$(gum style --foreground "$muted_color" "Format:") $(gum style --foreground "$link_color" "$format_info")
+$(gum style --foreground "$muted_color" "Example:") $(gum style --foreground "$dim_color" "$example")$help_text
 
 $req_text"
   echo ""
@@ -1059,13 +1100,13 @@ show_input_summary() {
   echo ""
   if [ -n "$value" ]; then
     # Has value - show what they entered
-    gum style --foreground 245 "$label: $(gum style --foreground 255 --bold "$value")"
+    gum style --foreground "$dim_color" "$label: $(gum style --foreground "$text_color" --bold "$value")"
   elif [ "$required" = "required" ]; then
     # Empty but required
     gum style --foreground 214 "No value entered (required)"
   else
     # Empty but optional - that's fine
-    gum style --foreground 245 "$label: (skipped)"
+    gum style --foreground "$dim_color" "$label: (skipped)"
   fi
   echo ""
 }
@@ -2483,7 +2524,7 @@ $(gum style --foreground 69 "$wallet_address")
 Please send at least $(gum style --foreground 214 "$min_deposit_display NES") to this address.
 This will cover your minimum deposit plus transaction fees.
 
-$(gum style --foreground 245 "Get testnet tokens from the Nesa Playground faucet:")
+$(gum style --foreground "$dim_color" "Get testnet tokens from the Nesa Playground faucet:")
 $(gum style --foreground "$link_color" "https://beta.nesa.ai/faucet")"
       echo ""
 
@@ -2563,14 +2604,14 @@ $(gum style --foreground "$link_color" "https://beta.nesa.ai/faucet")"
 
       if [ "$node_tx_status" = "success" ]; then
         gum style --foreground 42 "[OK] Node registered"
-        gum style --foreground 245 "    TX: ${node_tx_data}"
+        gum style --foreground "$dim_color" "    TX: ${node_tx_data}"
         gum spin -s line --title "Waiting for confirmation..." -- sleep 5
       else
         echo ""
         gum style --border rounded --padding "1 2" --border-foreground 196 \
           "$(gum style --foreground 196 --bold "NODE REGISTRATION FAILED")
 
-  $(gum style --foreground 250 "Error:") $node_tx_data"
+  $(gum style --foreground "$muted_color" "Error:") $node_tx_data"
         echo ""
         read -p "> Press Enter to continue..."
         return 1
@@ -2609,7 +2650,7 @@ $(gum style --foreground "$link_color" "https://beta.nesa.ai/faucet")"
 
     if [ "$miner_tx_status" = "success" ]; then
       gum style --foreground 42 "[OK] Miner registered"
-      gum style --foreground 245 "    TX: ${miner_tx_data}"
+      gum style --foreground "$dim_color" "    TX: ${miner_tx_data}"
       gum spin -s line --title "Waiting for confirmation..." -- sleep 5
     else
       # Check if error is "miner already registered"
@@ -2620,7 +2661,7 @@ $(gum style --foreground "$link_color" "https://beta.nesa.ai/faucet")"
         gum style --border rounded --padding "1 2" --border-foreground 196 \
           "$(gum style --foreground 196 --bold "MINER REGISTRATION FAILED")
 
-  $(gum style --foreground 250 "Error:") $miner_tx_data"
+  $(gum style --foreground "$muted_color" "Error:") $miner_tx_data"
         echo ""
         read -p "> Press Enter to continue..."
         return 1
@@ -2683,24 +2724,24 @@ $(gum style --foreground "$link_color" "https://beta.nesa.ai/faucet")"
     gum style --border rounded --padding "1 2" --border-foreground "$status_color" \
       "$(gum style --foreground "$status_color" --bold "$status_text")
 
-$(gum style --foreground 250 "$status_desc")
+$(gum style --foreground "$muted_color" "$status_desc")
 
-  $(gum style --foreground 245 "─────────────────────────────────────────────────────────────────")
+  $(gum style --foreground "$dim_color" "─────────────────────────────────────────────────────────────────")
 
   $(gum style --foreground 43 "Wallet:")             ${wallet_address}
   $(gum style --foreground 43 "Balance:")            $(gum style --bold "${balance_display} NES")
 
-  $(gum style --foreground 245 "─────────────────────────────────────────────────────────────────")
+  $(gum style --foreground "$dim_color" "─────────────────────────────────────────────────────────────────")
 
   $(gum style --foreground 43 "Minimum Required:")   ${min_deposit_display} NES
   $(gum style --foreground 43 "Current Deposit:")    $(gum style --foreground $status_color "${current_deposit_display} NES")
   $(gum style --foreground 43 "Bond Status:")        $(gum style --foreground $status_color "${bond_status}")${amount_needed_line}
 
-  $(gum style --foreground 245 "─────────────────────────────────────────────────────────────────")
+  $(gum style --foreground "$dim_color" "─────────────────────────────────────────────────────────────────")
 
-  $(gum style --foreground 250 "Gas Fee:")            ~${gas_fee_display} NES
+  $(gum style --foreground "$muted_color" "Gas Fee:")            ~${gas_fee_display} NES
 
-$(gum style --foreground 245 --italic "Deposits are held in escrow and can be withdrawn after
+$(gum style --foreground "$dim_color" --italic "Deposits are held in escrow and can be withdrawn after
 a 7-day unbonding period.")"
 
     echo ""
@@ -2803,18 +2844,18 @@ a 7-day unbonding period.")"
     gum style --border rounded --padding "1 2" --border-foreground 43 \
       "$(gum style --foreground 43 --bold "CONFIRM TRANSACTION")
 
-  $(gum style --foreground 245 "─────────────────────────────────────────────────────────────────")
+  $(gum style --foreground "$dim_color" "─────────────────────────────────────────────────────────────────")
 
-  $(gum style --foreground 250 "Deposit Amount:")     ${deposit_amount} NES
-  $(gum style --foreground 250 "Gas Fee:")            ~${gas_fee_display} NES
-  $(gum style --foreground 245 "─────────────────────────────────────────────────────────────────")
+  $(gum style --foreground "$muted_color" "Deposit Amount:")     ${deposit_amount} NES
+  $(gum style --foreground "$muted_color" "Gas Fee:")            ~${gas_fee_display} NES
+  $(gum style --foreground "$dim_color" "─────────────────────────────────────────────────────────────────")
   $(gum style --foreground 43 "Total Cost:")          $(gum style --bold "${total_cost_display} NES")
 
-  $(gum style --foreground 245 "─────────────────────────────────────────────────────────────────")
+  $(gum style --foreground "$dim_color" "─────────────────────────────────────────────────────────────────")
 
-  $(gum style --foreground 250 "After Transaction:")
-  $(gum style --foreground 250 "Your Deposit:")       ${final_deposit_display} NES  $(gum style --foreground $meets_color "[$meets_minimum]")
-  $(gum style --foreground 250 "Remaining Balance:")  ${remaining_balance_display} NES"
+  $(gum style --foreground "$muted_color" "After Transaction:")
+  $(gum style --foreground "$muted_color" "Your Deposit:")       ${final_deposit_display} NES  $(gum style --foreground $meets_color "[$meets_minimum]")
+  $(gum style --foreground "$muted_color" "Remaining Balance:")  ${remaining_balance_display} NES"
 
     echo ""
 
@@ -2845,7 +2886,7 @@ a 7-day unbonding period.")"
           gum style --border rounded --padding "1 2" --border-foreground 42 \
             "$(gum style --foreground 42 --bold "DEPOSIT SUCCESSFUL")
 
-  $(gum style --foreground 250 "Transaction Hash:")
+  $(gum style --foreground "$muted_color" "Transaction Hash:")
   $(gum style --foreground 69 "$tx_data")
 
   Your deposit of ${deposit_amount} NES has been submitted.
@@ -2871,7 +2912,7 @@ a 7-day unbonding period.")"
           gum style --border rounded --padding "1 2" --border-foreground 196 \
             "$(gum style --foreground 196 --bold "DEPOSIT FAILED")
 
-  $(gum style --foreground 250 "Error:") $tx_data
+  $(gum style --foreground "$muted_color" "Error:") $tx_data
 
   Please try again or check your wallet balance."
           echo ""
@@ -3068,7 +3109,7 @@ Balance: $(gum style --foreground "$main_color" --bold "$balance_display NES")"
             "bonded") status_color="2" ;;  # green
             "unbonding") status_color="3" ;;  # yellow
             "unbonded") status_color="1" ;;  # red
-            "not_registered") status_color="8" ;;  # gray
+            "not_registered") status_color="$dim_color" ;;  # gray (theme-aware)
           esac
 
           gum style --border double --padding "1 2" --border-foreground "$main_color" \
@@ -3115,7 +3156,7 @@ Status:  $(gum style --foreground "$status_color" --bold "$bond_status")"
 Minimum Deposit:    $(gum style --foreground "$main_color" --bold "$miner_min_display $miner_denom")
 Unbonding Period:   $miner_unbond
 
-$(gum style --foreground "8" "Note: You can add deposits anytime. Withdrawals require the unbonding period.")"
+$(gum style --foreground "$note_color" "Note: You can add deposits anytime. Withdrawals require the unbonding period.")"
         else
           local error_msg=$(echo "$params_result" | cut -d'|' -f2-)
           echo "Error: $error_msg"
@@ -3456,13 +3497,13 @@ delete_node() {
   gum style --border rounded --padding "1 2" --border-foreground 196 \
     "$(gum style --foreground 196 --bold "PERMANENT NODE DELETION")
 
-$(gum style --foreground 250 "This action is") $(gum style --foreground 196 --bold "IRREVERSIBLE")$(gum style --foreground 250 ". All data will be permanently deleted:")
+$(gum style --foreground "$muted_color" "This action is") $(gum style --foreground 196 --bold "IRREVERSIBLE")$(gum style --foreground "$muted_color" ". All data will be permanently deleted:")
 
-  $(gum style --foreground 250 "•") Docker containers (orchestrator, watchtower, log-signer)
-  $(gum style --foreground 250 "•") Configuration files (~/.nesa/env/)
-  $(gum style --foreground 250 "•") Bootstrap logs (~/.nesa/logs/)
-  $(gum style --foreground 250 "•") Model cache (~/.nesa/cache/)
-  $(gum style --foreground 250 "•") Node identity files (~/.nesa/identity/)
+  $(gum style --foreground "$muted_color" "•") Docker containers (orchestrator, watchtower, log-signer)
+  $(gum style --foreground "$muted_color" "•") Configuration files (~/.nesa/env/)
+  $(gum style --foreground "$muted_color" "•") Bootstrap logs (~/.nesa/logs/)
+  $(gum style --foreground "$muted_color" "•") Model cache (~/.nesa/cache/)
+  $(gum style --foreground "$muted_color" "•") Node identity files (~/.nesa/identity/)
 
 $(gum style --foreground 196 --bold "WARNING: Your wallet private key will NOT be recoverable")
 $(gum style --foreground 196 "if you have not backed it up elsewhere.")"
@@ -3526,7 +3567,7 @@ $(gum style --foreground 196 "if you have not backed it up elsewhere.")"
   echo ""
   gum style --foreground 42 --bold "Node deleted successfully."
   echo ""
-  gum style --foreground 250 "You can run the bootstrap script again to set up a new node."
+  gum style --foreground "$muted_color" "You can run the bootstrap script again to set up a new node."
   sleep 3
 
   exit 0
@@ -3640,14 +3681,14 @@ show_node_status() {
     "running") orch_status_color=42 ;;  # green
     "exited"|"dead") orch_status_color=196 ;;  # red
     "restarting") orch_status_color=214 ;;  # yellow
-    *) orch_status_color=245 ;;  # gray
+    *) orch_status_color=$dim_color ;;  # gray (theme-aware)
   esac
 
   case "$wt_status" in
     "running") wt_status_color=42 ;;
     "exited"|"dead") wt_status_color=196 ;;
     "restarting") wt_status_color=214 ;;
-    *) wt_status_color=245 ;;
+    *) wt_status_color=$dim_color ;;  # gray (theme-aware)
   esac
 
   # Overall status - check both running state AND health check result
@@ -3670,7 +3711,7 @@ show_node_status() {
     overall_msg="Orchestrator is restarting, please wait..."
   elif [ "$orch_status" = "not_found" ]; then
     overall_status="NOT STARTED"
-    overall_color=245
+    overall_color=$dim_color
     overall_msg="Node containers have not been started yet"
   else
     overall_status="UNHEALTHY"
@@ -3687,12 +3728,12 @@ $overall_msg"
   echo ""
 
   # Container table using ANSI colors (gum style --inline not available in all versions)
-  # Color codes: 32=green, 31=red, 33=yellow, 90=gray
+  # Using 256-color codes for theme awareness: \033[38;5;XXXm
   local color_reset="\033[0m"
   local color_green="\033[32m"
   local color_red="\033[31m"
   local color_yellow="\033[33m"
-  local color_gray="\033[90m"
+  local color_gray="\033[38;5;${dim_color}m"
 
   # Map status colors to ANSI
   local orch_ansi wt_ansi
@@ -3747,9 +3788,9 @@ stream_logs() {
 
   echo ""
   gum style --bold --foreground "$main_color" "LIVE LOGS: $container"
-  gum style --foreground 245 "Press Ctrl+C to stop and return to menu"
+  gum style --foreground "$dim_color" "Press Ctrl+C to stop and return to menu"
   echo ""
-  gum style --foreground 245 "─────────────────────────────────────────────────────────────────"
+  gum style --foreground "$dim_color" "─────────────────────────────────────────────────────────────────"
   echo ""
 
   # Find actual container name
@@ -3763,7 +3804,7 @@ stream_logs() {
   fi
 
   # Stream logs with trap to handle Ctrl+C gracefully
-  trap 'echo ""; gum style --foreground 245 "Stopped log streaming."; sleep 1; return 0' INT
+  trap 'echo ""; gum style --foreground "$dim_color" "Stopped log streaming."; sleep 1; return 0' INT
 
   docker logs -f --tail "$tail_lines" "$actual_container" 2>&1
 
@@ -3799,7 +3840,7 @@ show_status_and_logs_menu() {
         echo ""
         gum style --bold --foreground "$main_color" "LAST 100 LOG LINES"
         echo ""
-        gum style --foreground 245 "─────────────────────────────────────────────────────────────────"
+        gum style --foreground "$dim_color" "─────────────────────────────────────────────────────────────────"
         echo ""
 
         local orch_container
@@ -3813,7 +3854,7 @@ show_status_and_logs_menu() {
         fi
 
         echo ""
-        gum style --foreground 245 "─────────────────────────────────────────────────────────────────"
+        gum style --foreground "$dim_color" "─────────────────────────────────────────────────────────────────"
         echo ""
         read -r -s -p "Press Enter to continue..." && echo
         ;;
@@ -3823,7 +3864,7 @@ show_status_and_logs_menu() {
         echo ""
         gum style --bold --foreground "$main_color" "WATCHTOWER LOGS (Last 50 lines)"
         echo ""
-        gum style --foreground 245 "─────────────────────────────────────────────────────────────────"
+        gum style --foreground "$dim_color" "─────────────────────────────────────────────────────────────────"
         echo ""
 
         local wt_container
@@ -3837,7 +3878,7 @@ show_status_and_logs_menu() {
         fi
 
         echo ""
-        gum style --foreground 245 "─────────────────────────────────────────────────────────────────"
+        gum style --foreground "$dim_color" "─────────────────────────────────────────────────────────────────"
         echo ""
         read -r -s -p "Press Enter to continue..." && echo
         ;;
@@ -4341,10 +4382,10 @@ while true; do
       gum style --border rounded --padding "1 2" --border-foreground "$main_color" \
         "$(gum style --foreground "$main_color" --bold "STEP 4 OF 4: WALLET SETUP")
 
-$(gum style --foreground 255 "Your wallet holds NES for staking and rewards.")
-$(gum style --foreground 255 "You need a secp256k1 private key (same as Ethereum).")
+$(gum style --foreground "$text_color" "Your wallet holds NES for staking and rewards.")
+$(gum style --foreground "$text_color" "You need a secp256k1 private key (same as Ethereum).")
 
-$(gum style --foreground 245 "Select an option below")"
+$(gum style --foreground "$dim_color" "Select an option below")"
       echo ""
 
       # Different options based on whether key already exists
@@ -4408,10 +4449,10 @@ $(gum style --foreground 245 "Select an option below")"
       gum style --border rounded --padding "1 2" --border-foreground "$main_color" \
         "$(gum style --foreground "$main_color" --bold "ENTER PRIVATE KEY")
 
-$(gum style --foreground 255 "Your wallet's private key (secp256k1, same as Ethereum).")
+$(gum style --foreground "$text_color" "Your wallet's private key (secp256k1, same as Ethereum).")
 
-$(gum style --foreground 250 "Format:") $(gum style --foreground "$link_color" "64 hexadecimal characters (with or without 0x prefix)")
-$(gum style --foreground 250 "Example:") $(gum style --foreground 245 "0x1a2b3c4d5e6f... or 1a2b3c4d5e6f...")
+$(gum style --foreground "$muted_color" "Format:") $(gum style --foreground "$link_color" "64 hexadecimal characters (with or without 0x prefix)")
+$(gum style --foreground "$muted_color" "Example:") $(gum style --foreground "$dim_color" "0x1a2b3c4d5e6f... or 1a2b3c4d5e6f...")
 
 $(gum style --foreground 196 "WARNING: Never share your private key with anyone!")"
       echo ""
@@ -4471,10 +4512,10 @@ $(gum style --foreground 196 "WARNING: Never share your private key with anyone!
       gum style --border rounded --padding "1 2" --border-foreground 214 \
         "$(gum style --foreground 214 --bold "VERIFY YOUR WALLET")
 
-$(gum style --foreground 255 "Derived wallet address:")
+$(gum style --foreground "$text_color" "Derived wallet address:")
 $(gum style --foreground "$link_color" --bold "$derived_address")
 
-$(gum style --foreground 250 "Does this match your expected wallet address?")"
+$(gum style --foreground "$muted_color" "Does this match your expected wallet address?")"
       echo ""
 
       verify_choice=$(gum choose --header="" --no-show-help --cursor.foreground "$main_color" \
@@ -4514,21 +4555,21 @@ $(gum style --foreground 250 "Does this match your expected wallet address?")"
 $(gum style --foreground 196 --bold "IMPORTANT: SAVE THIS PRIVATE KEY NOW!")
 $(gum style --foreground 196 "This is the ONLY time it will be displayed.")
 
-$(gum style --foreground 245 "─────────────────────────────────────────────────────────────")
+$(gum style --foreground "$dim_color" "─────────────────────────────────────────────────────────────")
 
 $(gum style --foreground "$main_color" "Private Key:")
-$(gum style --foreground 255 --bold "$NODE_PRIV_KEY")
+$(gum style --foreground "$text_color" --bold "$NODE_PRIV_KEY")
 
 $(gum style --foreground "$main_color" "Wallet Address:")
-$(gum style --foreground 255 "$new_wallet_address")
+$(gum style --foreground "$text_color" "$new_wallet_address")
 
 $(gum style --foreground "$main_color" "Public Key:")
-$(gum style --foreground 255 "$new_public_key")
+$(gum style --foreground "$text_color" "$new_public_key")
 
-$(gum style --foreground 245 "─────────────────────────────────────────────────────────────")
+$(gum style --foreground "$dim_color" "─────────────────────────────────────────────────────────────")
 
-$(gum style --foreground 250 "Store your private key securely. Anyone with this key")
-$(gum style --foreground 250 "can access your wallet and funds.")"
+$(gum style --foreground "$muted_color" "Store your private key securely. Anyone with this key")
+$(gum style --foreground "$muted_color" "can access your wallet and funds.")"
 
       echo ""
 
@@ -4538,7 +4579,7 @@ $(gum style --foreground 250 "can access your wallet and funds.")"
         echo ""
         gum style --foreground 214 "Please save your private key before continuing!"
         echo ""
-        gum style --foreground 255 "Private Key: $NODE_PRIV_KEY"
+        gum style --foreground "$text_color" "Private Key: $NODE_PRIV_KEY"
         echo ""
         read -r -s -p "Press Enter once you have saved it..." && echo
       fi
@@ -4552,9 +4593,9 @@ Before your node can register and start mining, you need
 to fund your wallet with NES.
 
 $(gum style --foreground "$main_color" "Send tokens to:")
-$(gum style --foreground 255 --bold "$new_wallet_address")
+$(gum style --foreground "$text_color" --bold "$new_wallet_address")
 
-$(gum style --foreground 245 "Get testnet tokens from the Nesa Playground faucet:")
+$(gum style --foreground "$dim_color" "Get testnet tokens from the Nesa Playground faucet:")
 $(gum style --foreground "$link_color" "https://beta.nesa.ai/faucet")"
 
       echo ""
