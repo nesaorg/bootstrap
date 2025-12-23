@@ -19,7 +19,16 @@
 trap 'trap " " SIGINT SIGTERM SIGHUP; kill 0; wait; sigterm_handler' SIGINT SIGTERM SIGHUP
 
 # Store the real script path for restarts
-SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+# Handle running via process substitution (bash <(curl ...)) where BASH_SOURCE is /dev/fd/XX
+_raw_script_path="${BASH_SOURCE[0]}"
+if [[ "$_raw_script_path" == /dev/fd/* ]] || [[ "$_raw_script_path" == /proc/self/fd/* ]]; then
+  # Running from process substitution - save script to ~/.nesa for restarts
+  SCRIPT_PATH="${HOME}/.nesa/bootstrap.sh"
+  RUNNING_FROM_PIPE=true
+else
+  SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+  RUNNING_FROM_PIPE=false
+fi
 
 # Detect OS early for platform-specific code
 OS_TYPE="$(uname -s)"
@@ -35,6 +44,19 @@ if ! mkdir -p "${DEFAULT_WORKDIR}" "${LOG_DIR}" "${ENV_DIR}" 2>/dev/null; then
   echo "Please check permissions on your home directory."
   exit 1
 fi
+
+# Helper to restart the script - handles process substitution (bash <(curl...)) gracefully
+restart_script() {
+  if [[ "$RUNNING_FROM_PIPE" == "true" ]]; then
+    echo ""
+    echo "To return to the main menu, please re-run the bootstrap command:"
+    echo "  bash <(curl -s https://raw.githubusercontent.com/nesaorg/bootstrap/master/bootstrap.sh)"
+    echo ""
+    exit 0
+  else
+    restart_script
+  fi
+}
 
 # Mirror STDOUT and STDERR to file; only the copy to file is timestamped.
 # This preserves gum's interactive UI on the terminal.
@@ -331,6 +353,23 @@ prompt_height=${PROMPT_HEIGHT:-1}
 main_color=43
 link_color=69
 
+# Detect if running on a serial console or basic terminal with limited color support
+detect_basic_terminal() {
+  # Check for serial console (ttyS*, ttyAMA*, ttyUSB*, etc.)
+  local tty_name
+  tty_name=$(tty 2>/dev/null || echo "")
+  case "$tty_name" in
+    /dev/ttyS*|/dev/ttyAMA*|/dev/ttyUSB*|/dev/hvc*) return 0 ;;
+  esac
+  # Check TERM variable for basic terminals
+  case "$TERM" in
+    dumb|vt100|vt220|linux|screen) return 0 ;;
+  esac
+  # No TERM set usually means basic terminal
+  [[ -z "$TERM" ]] && return 0
+  return 1
+}
+
 # Detect light/dark terminal background
 # COLORFGBG format: "fg;bg" - bg of 15, 7, or similar means light background
 # Also check common light terminal indicators
@@ -358,7 +397,16 @@ detect_light_terminal() {
 }
 
 # Define theme-aware colors
-if detect_light_terminal; then
+if detect_basic_terminal; then
+  # Basic terminal - use simple ANSI colors (0-7) that work everywhere
+  dim_color=7       # white/light grey
+  muted_color=7     # white/light grey
+  text_color=7      # white
+  divider_color=7   # white
+  note_color=7      # white
+  main_color=6      # cyan
+  link_color=4      # blue
+elif detect_light_terminal; then
   dim_color=241      # dark grey - readable on white
   muted_color=238    # darker grey for secondary text
   text_color=236     # near-black for main descriptions
@@ -915,7 +963,22 @@ check_python_and_ecdsa() {
     if [ "$install_success" = false ]; then
       echo "Creating Python virtual environment at ${NESA_VENV}..."
 
-      if python3 -m venv "${NESA_VENV}" 2>/dev/null; then
+      # Try creating venv - if it fails, try installing python3-venv (Linux only)
+      if ! python3 -m venv "${NESA_VENV}" 2>/dev/null; then
+        if [[ "$OSTYPE" == "linux"* ]] && command_exists apt-get; then
+          echo "Installing python3-venv and build dependencies..."
+          # Get Python version for the correct venv package
+          local py_version
+          py_version=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+          run_with_sudo apt-get update -qq
+          run_with_sudo apt-get install -y -qq "python${py_version}-venv" build-essential libffi-dev python3-dev 2>/dev/null || \
+          run_with_sudo apt-get install -y -qq python3-venv build-essential libffi-dev python3-dev 2>/dev/null
+          # Retry venv creation
+          python3 -m venv "${NESA_VENV}" 2>/dev/null
+        fi
+      fi
+
+      if [ -d "${NESA_VENV}" ]; then
         # shellcheck disable=SC1091
         source "${NESA_VENV}/bin/activate"
         PYTHON_CMD="${NESA_VENV}/bin/python3"
@@ -1131,7 +1194,7 @@ wizard_nav() {
 # Return to main menu (restarts script)
 # Script will show main menu if config exists, or wizard if not
 return_to_main_menu() {
-  exec "$SCRIPT_PATH"
+  restart_script
 }
 
 # Validate wizard input - returns "ok" or "error|message"
@@ -1778,7 +1841,7 @@ def private_key_to_address(private_key_hex, prefix='$prefix'):
     public_key_compressed = b'\x02' + vk.to_string()[:32] if vk.to_string()[-1] % 2 == 0 else b'\x03' + vk.to_string()[:32]
 
     sha256_hash = hashlib.sha256(public_key_compressed).digest()
-    ripemd160_hash = hashlib.new('ripemd160', sha256_hash).digest()
+    ripemd160_hash = hashlib.new('ripemd160', sha256_hash, usedforsecurity=False).digest()
 
     five_bit_data = convertbits(ripemd160_hash, 8, 5)
     return bech32_encode(prefix, five_bit_data)
@@ -2091,12 +2154,22 @@ try:
         using_relay=False
     )
 
-    # Initial load to verify account exists
+    # Initial load to verify account exists (with retry for indexing delay)
     client = HTTPClient(api=lcd_url)
-    try:
-        client.load_account_data(account=account)
-    except Exception as load_err:
-        print(f"error|Account not found on chain. Please fund your wallet first: {wallet_address}")
+    account_loaded = False
+    account_retries = 5
+    for acc_attempt in range(account_retries):
+        try:
+            client.load_account_data(account=account)
+            account_loaded = True
+            break
+        except Exception as load_err:
+            if acc_attempt < account_retries - 1:
+                time.sleep(2 * (acc_attempt + 1))  # exponential backoff: 2s, 4s, 6s, 8s
+            continue
+
+    if not account_loaded:
+        print(f"error|Account not found on chain after {account_retries} attempts. If you just funded your wallet, please wait a moment and try again. Wallet: {wallet_address}")
         sys.exit(0)
 
     # Retry loop for sequence mismatch
@@ -2230,12 +2303,22 @@ try:
         model_name=model_name
     )
 
-    # Initial load to verify account exists
+    # Initial load to verify account exists (with retry for indexing delay)
     client = HTTPClient(api=lcd_url)
-    try:
-        client.load_account_data(account=account)
-    except Exception as load_err:
-        print(f"error|Account not found on chain. Please fund your wallet first: {wallet_address}")
+    account_loaded = False
+    account_retries = 5
+    for acc_attempt in range(account_retries):
+        try:
+            client.load_account_data(account=account)
+            account_loaded = True
+            break
+        except Exception as load_err:
+            if acc_attempt < account_retries - 1:
+                time.sleep(2 * (acc_attempt + 1))  # exponential backoff: 2s, 4s, 6s, 8s
+            continue
+
+    if not account_loaded:
+        print(f"error|Account not found on chain after {account_retries} attempts. If you just funded your wallet, please wait a moment and try again. Wallet: {wallet_address}")
         sys.exit(0)
 
     # Retry loop for sequence mismatch
@@ -2371,12 +2454,22 @@ try:
         hrp="nesa",
     )
 
-    # Initial load to verify account exists
+    # Initial load to verify account exists (with retry for indexing delay)
     client = HTTPClient(api=lcd_url)
-    try:
-        client.load_account_data(account=account)
-    except Exception as load_err:
-        print(f"error|Account not found on chain. Please fund your wallet first: {account.address}")
+    account_loaded = False
+    account_retries = 5
+    for acc_attempt in range(account_retries):
+        try:
+            client.load_account_data(account=account)
+            account_loaded = True
+            break
+        except Exception as load_err:
+            if acc_attempt < account_retries - 1:
+                time.sleep(2 * (acc_attempt + 1))  # exponential backoff: 2s, 4s, 6s, 8s
+            continue
+
+    if not account_loaded:
+        print(f"error|Account not found on chain after {account_retries} attempts. If you just funded your wallet, please wait a moment and try again. Wallet: {account.address}")
         sys.exit(0)
 
     if account.next_sequence is None:
@@ -4683,7 +4776,7 @@ if [ "$post_config_choice" != "Start Node Now" ]; then
   echo ""
   gum style --foreground "$main_color" "Configuration saved. Returning to main menu..."
   sleep 1
-  exec "$SCRIPT_PATH"  # Restart script to show main menu
+  restart_script  # Restart script to show main menu
 fi
 
 log_line "[SETUP] User chose: Start Node Now"
@@ -4708,7 +4801,7 @@ if [ "$deposit_result" -eq 2 ]; then
   echo ""
   gum style --foreground "$main_color" "Returning to main menu. You can fund your wallet and try again later."
   sleep 2
-  exec "$SCRIPT_PATH"
+  restart_script
 elif [ "$deposit_result" -eq 1 ]; then
   # Actual error
   log_line "[ERROR] Deposit check failed"
@@ -4723,7 +4816,7 @@ Could not verify deposit status. This may be due to:
 Please fund your wallet and try again."
   echo ""
   read -r -s -p "Press Enter to return to main menu..." && echo
-  exec "$SCRIPT_PATH"
+  restart_script
 fi
 
 cd "$WORKING_DIRECTORY/docker" || {
@@ -4765,7 +4858,7 @@ while true; do
       ;;
     "Return to Main Menu")
       log_line "[MENU] Post-setup: Return to Main Menu"
-      exec "$SCRIPT_PATH"
+      restart_script
       ;;
     "Exit"|"")
       log_line "[ACTION] User exited after successful setup"
