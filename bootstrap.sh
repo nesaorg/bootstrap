@@ -470,6 +470,50 @@ safe_input() {
   fi
 }
 
+# Safe choose wrapper - numbered menu on basic terminals
+# Usage: result=$(safe_choose "option1" "option2" "option3")
+safe_choose() {
+  local options=("$@")
+  local i result
+
+  if [[ "$BASIC_TERMINAL" == "true" ]]; then
+    echo "" >&2
+    for i in "${!options[@]}"; do
+      echo "  $((i+1))) ${options[$i]}" >&2
+    done
+    echo "" >&2
+    while true; do
+      read -r -p "Enter choice [1-${#options[@]}]: " result
+      if [[ "$result" =~ ^[0-9]+$ ]] && [ "$result" -ge 1 ] && [ "$result" -le "${#options[@]}" ]; then
+        echo "${options[$((result-1))]}"
+        return 0
+      fi
+      echo "Invalid choice. Enter 1-${#options[@]}" >&2
+    done
+  else
+    gum choose --cursor.foreground "${main_color}" "${options[@]}"
+  fi
+}
+
+# Safe confirm wrapper - uses choose-style on basic terminals (toggle doesn't work well)
+# Usage: if safe_confirm "Are you sure?"; then ...
+safe_confirm() {
+  local prompt="${1:-Continue?}"
+  local yes_text="${2:-Yes}"
+  local no_text="${3:-No}"
+  local result
+
+  if [[ "$BASIC_TERMINAL" == "true" ]]; then
+    # Use gum choose style which works on serial consoles
+    echo "" >&2
+    echo "$prompt" >&2
+    result=$(gum choose --cursor.foreground "${main_color}" "$yes_text" "$no_text")
+    [[ "$result" == "$yes_text" ]]
+  else
+    gum confirm --prompt.foreground "${main_color}" "$prompt"
+  fi
+}
+
 #
 # EARLY DEPENDENCY CHECKS - must run before any gum usage
 #
@@ -990,6 +1034,8 @@ check_python_and_ecdsa() {
   $PYTHON_CMD -c "import mospy" 2>/dev/null || missing_libs+=("mospy-wallet")
   $PYTHON_CMD -c "import httpx" 2>/dev/null || missing_libs+=("httpx")
   $PYTHON_CMD -c "import betterproto" 2>/dev/null || missing_libs+=("betterproto")
+  # Pure Python ripemd160 for systems where OpenSSL 3.0 has it disabled
+  $PYTHON_CMD -c "from ripemd.ripemd160 import ripemd160" 2>/dev/null || missing_libs+=("ripemd-hash")
 
   if [ ${#missing_libs[@]} -gt 0 ]; then
     echo "Installing required Python libraries: ${missing_libs[*]}..."
@@ -1841,6 +1887,7 @@ derive_wallet_address() {
   ${NESA_PYTHON_CMD:-python3} -c "
 import hashlib
 import ecdsa
+from ripemd.ripemd160 import ripemd160
 
 def bech32_polymod(values):
     GEN = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3]
@@ -1891,7 +1938,7 @@ def private_key_to_address(private_key_hex, prefix='$prefix'):
     public_key_compressed = b'\x02' + vk.to_string()[:32] if vk.to_string()[-1] % 2 == 0 else b'\x03' + vk.to_string()[:32]
 
     sha256_hash = hashlib.sha256(public_key_compressed).digest()
-    ripemd160_hash = hashlib.new('ripemd160', sha256_hash, usedforsecurity=False).digest()
+    ripemd160_hash = ripemd160(sha256_hash)  # Pure Python - works on all systems
 
     five_bit_data = convertbits(ripemd160_hash, 8, 5)
     return bech32_encode(prefix, five_bit_data)
@@ -3665,10 +3712,7 @@ $(gum style --foreground 196 "if you have not backed it up elsewhere.")"
   echo ""
 
   # Final confirmation
-  if ! gum confirm --prompt.foreground 196 \
-    --affirmative "Yes, delete everything" \
-    --negative "No, cancel" \
-    "Are you absolutely sure?"; then
+  if ! safe_confirm "Are you absolutely sure?" "Yes, delete everything" "No, cancel"; then
     echo ""
     gum style --foreground 214 "Deletion cancelled."
     log_line "[ACTION] Node deletion cancelled at final confirmation"
@@ -3898,19 +3942,7 @@ $overall_msg"
 
   echo -e "${color_gray}─────────────────────────────────────────────────────────────────${color_reset}"
 
-  # Show recent errors if orchestrator is not healthy
-  if [ "$orch_health" = "unhealthy" ] || { [ "$orch_status" != "running" ] && [ "$orch_status" != "not_found" ]; }; then
-    echo ""
-    gum style --foreground 196 --bold "Recent Logs:"
-    local err_container
-    err_container=$(find_container "orchestrator")
-    if [ -n "$err_container" ]; then
-      docker logs "$err_container" --tail 10 2>&1 | while read -r line; do
-        echo "  $line"
-      done
-    fi
-  fi
-
+  # Users can use "View Logs" menu option for detailed logs
   echo ""
 }
 
@@ -4386,7 +4418,7 @@ while true; do
         log_line "[ERROR] Moniker validation failed: ${validation#error|}"
         gum style --foreground 196 "  ${validation#error|}"
         echo ""
-        if gum confirm "" --affirmative "Try Again" --negative "Cancel"; then
+        if safe_confirm "" "Try Again" "Cancel"; then
           continue
         else
           return_to_main_menu
@@ -4394,7 +4426,7 @@ while true; do
       fi
 
       # Navigation (first step - no back)
-      if gum confirm "" --affirmative "Continue →" --negative "Cancel"; then
+      if safe_confirm "" "Continue →" "Cancel"; then
         log_line "[SETUP] Moniker set: $MONIKER"
         wizard_step=2
       else
@@ -4686,7 +4718,7 @@ $(gum style --foreground "$muted_color" "can access your wallet and funds.")"
       echo ""
 
       # Make them confirm they saved it
-      if ! gum confirm --prompt.foreground 214 "I have saved my private key securely"; then
+      if ! safe_confirm "I have saved my private key securely" "Yes" "No"; then
         log_line "[WALLET] User did not confirm key saved - showing key again"
         echo ""
         gum style --foreground 214 "Please save your private key before continuing!"
