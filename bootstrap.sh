@@ -255,7 +255,9 @@ import time
 import os
 import ecdsa
 
-priv_hex = "${priv_key}".lstrip("0x")
+priv_hex = "${priv_key}".strip()
+if priv_hex.lower().startswith("0x"):
+    priv_hex = priv_hex[2:]
 priv_bytes = bytes.fromhex(priv_hex)
 sk = ecdsa.SigningKey.from_string(priv_bytes, curve=ecdsa.SECP256k1)
 vk = sk.get_verifying_key()
