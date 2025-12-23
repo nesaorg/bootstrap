@@ -54,7 +54,7 @@ restart_script() {
     echo ""
     exit 0
   else
-    restart_script
+    exec "$SCRIPT_PATH"
   fi
 }
 
@@ -419,6 +419,56 @@ else
   divider_color=245  # grey for dividers
   note_color=245     # grey for notes
 fi
+
+# Store basic terminal detection result for use in safe_input
+BASIC_TERMINAL=false
+if detect_basic_terminal; then
+  BASIC_TERMINAL=true
+fi
+
+# Safe input wrapper - uses simple read on basic terminals (serial consoles)
+# where gum input doesn't work well
+# Usage: result=$(safe_input "prompt" "default_value" [password])
+safe_input() {
+  local prompt="$1"
+  local default="$2"
+  local is_password="$3"
+  local result
+
+  if [[ "$BASIC_TERMINAL" == "true" ]]; then
+    # Basic terminal - use simple read
+    if [[ "$is_password" == "password" ]]; then
+      read -r -s -p "${prompt}: " result
+      echo "" >&2  # newline after hidden input
+    elif [[ -n "$default" ]]; then
+      read -r -p "${prompt} [${default}]: " result
+      result="${result:-$default}"
+    else
+      read -r -p "${prompt}: " result
+    fi
+    echo "$result"
+  else
+    # Normal terminal - use gum input
+    if [[ "$is_password" == "password" ]]; then
+      gum input --cursor.foreground "${main_color}" \
+        --prompt.foreground "${main_color}" \
+        --prompt "${prompt}: " \
+        --placeholder "" \
+        --password \
+        --width 60 \
+        --no-show-help \
+        --value "$default"
+    else
+      gum input --cursor.foreground "${main_color}" \
+        --prompt.foreground "${main_color}" \
+        --prompt "${prompt}: " \
+        --placeholder "" \
+        --width 60 \
+        --no-show-help \
+        --value "$default"
+    fi
+  fi
+}
 
 #
 # EARLY DEPENDENCY CHECKS - must run before any gum usage
@@ -2862,11 +2912,7 @@ a 7-day unbonding period.")"
     fi
 
     local deposit_amount
-    deposit_amount=$(gum input \
-      --placeholder "Enter deposit amount in NES" \
-      --value "$default_amount" \
-      --prompt "Deposit amount: " \
-      --prompt.foreground "$main_color")
+    deposit_amount=$(safe_input "Deposit amount (NES)" "$default_amount")
 
     echo ""
     local nav
@@ -3606,10 +3652,7 @@ $(gum style --foreground 196 "if you have not backed it up elsewhere.")"
 
   # Require typing DELETE to confirm
   local confirm_text
-  confirm_text=$(gum input \
-    --prompt "Type DELETE to confirm permanent deletion: " \
-    --placeholder "" \
-    --prompt.foreground 196)
+  confirm_text=$(safe_input "Type DELETE to confirm permanent deletion" "")
 
   if [ "$confirm_text" != "DELETE" ]; then
     echo ""
@@ -4331,13 +4374,7 @@ while true; do
         "my-mining-node, server-01, nesa-validator" \
         "required"
 
-      MONIKER=$(gum input --cursor.foreground "${main_color}" \
-        --prompt.foreground "${main_color}" \
-        --prompt "Node name: " \
-        --placeholder "${MONIKER:-my-node}" \
-        --width 60 \
-        --no-show-help \
-        --value "$MONIKER")
+      MONIKER=$(safe_input "Node name" "${MONIKER:-my-node}")
       MONIKER=$(echo "$MONIKER" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 
       # Show what user entered
@@ -4372,13 +4409,7 @@ while true; do
         "nesa1abc123def456ghi789jkl012mno345pqr678st" \
         "optional"
 
-      REF_CODE=$(gum input --cursor.foreground "${main_color}" \
-        --prompt.foreground "${main_color}" \
-        --prompt "Referral code: " \
-        --placeholder "" \
-        --width 60 \
-        --no-show-help \
-        --value "$REF_CODE")
+      REF_CODE=$(safe_input "Referral code" "$REF_CODE")
 
       # Show what user entered
       show_input_summary "Referral code" "$REF_CODE" "optional"
@@ -4419,14 +4450,7 @@ while true; do
         "optional" \
         "https://huggingface.co/settings/tokens"
 
-      HUGGINGFACE_API_KEY=$(gum input --cursor.foreground "${main_color}" \
-        --prompt.foreground "${main_color}" \
-        --prompt "API key: " \
-        --placeholder "" \
-        --password \
-        --width 60 \
-        --no-show-help \
-        --value "$HUGGINGFACE_API_KEY")
+      HUGGINGFACE_API_KEY=$(safe_input "API key" "$HUGGINGFACE_API_KEY" "password")
 
       # Show what user entered (masked for security)
       if [ -n "$HUGGINGFACE_API_KEY" ]; then
@@ -4550,12 +4574,7 @@ $(gum style --foreground "$muted_color" "Example:") $(gum style --foreground "$d
 $(gum style --foreground 196 "WARNING: Never share your private key with anyone!")"
       echo ""
 
-      NODE_PRIV_KEY=$(gum input --cursor.foreground "${main_color}" \
-        --password \
-        --prompt.foreground "${main_color}" \
-        --prompt "Private key: " \
-        --width 70 \
-        --no-show-help)
+      NODE_PRIV_KEY=$(safe_input "Private key" "" "password")
 
       # Show what user entered (masked)
       if [ -n "$NODE_PRIV_KEY" ]; then
