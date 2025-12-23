@@ -19,7 +19,16 @@
 trap 'trap " " SIGINT SIGTERM SIGHUP; kill 0; wait; sigterm_handler' SIGINT SIGTERM SIGHUP
 
 # Store the real script path for restarts
-SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+# Handle running via process substitution (bash <(curl ...)) where BASH_SOURCE is /dev/fd/XX
+_raw_script_path="${BASH_SOURCE[0]}"
+if [[ "$_raw_script_path" == /dev/fd/* ]] || [[ "$_raw_script_path" == /proc/self/fd/* ]]; then
+  # Running from process substitution - save script to ~/.nesa for restarts
+  SCRIPT_PATH="${HOME}/.nesa/bootstrap.sh"
+  RUNNING_FROM_PIPE=true
+else
+  SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+  RUNNING_FROM_PIPE=false
+fi
 
 # Detect OS early for platform-specific code
 OS_TYPE="$(uname -s)"
@@ -35,6 +44,19 @@ if ! mkdir -p "${DEFAULT_WORKDIR}" "${LOG_DIR}" "${ENV_DIR}" 2>/dev/null; then
   echo "Please check permissions on your home directory."
   exit 1
 fi
+
+# Helper to restart the script - handles process substitution (bash <(curl...)) gracefully
+restart_script() {
+  if [[ "$RUNNING_FROM_PIPE" == "true" ]]; then
+    echo ""
+    echo "To return to the main menu, please re-run the bootstrap command:"
+    echo "  bash <(curl -s https://raw.githubusercontent.com/nesaorg/bootstrap/master/bootstrap.sh)"
+    echo ""
+    exit 0
+  else
+    exec "$SCRIPT_PATH"
+  fi
+}
 
 # Mirror STDOUT and STDERR to file; only the copy to file is timestamped.
 # This preserves gum's interactive UI on the terminal.
@@ -233,7 +255,9 @@ import time
 import os
 import ecdsa
 
-priv_hex = "${priv_key}".lstrip("0x")
+priv_hex = "${priv_key}".strip()
+if priv_hex.lower().startswith("0x"):
+    priv_hex = priv_hex[2:]
 priv_bytes = bytes.fromhex(priv_hex)
 sk = ecdsa.SigningKey.from_string(priv_bytes, curve=ecdsa.SECP256k1)
 vk = sk.get_verifying_key()
@@ -330,6 +354,167 @@ terminal_width="${terminal_size#* }"
 prompt_height=${PROMPT_HEIGHT:-1}
 main_color=43
 link_color=69
+
+# Detect if running on a serial console or basic terminal with limited color support
+detect_basic_terminal() {
+  # Check for serial console (ttyS*, ttyAMA*, ttyUSB*, etc.)
+  local tty_name
+  tty_name=$(tty 2>/dev/null || echo "")
+  case "$tty_name" in
+    /dev/ttyS*|/dev/ttyAMA*|/dev/ttyUSB*|/dev/hvc*) return 0 ;;
+  esac
+  # Check TERM variable for basic terminals
+  case "$TERM" in
+    dumb|vt100|vt220|linux|screen) return 0 ;;
+  esac
+  # No TERM set usually means basic terminal
+  [[ -z "$TERM" ]] && return 0
+  return 1
+}
+
+# Detect light/dark terminal background
+# COLORFGBG format: "fg;bg" - bg of 15, 7, or similar means light background
+# Also check common light terminal indicators
+detect_light_terminal() {
+  # Check COLORFGBG (set by some terminals like xterm, rxvt)
+  # Extract background value after the semicolon
+  if [[ -n "$COLORFGBG" ]]; then
+    local bg_color="${COLORFGBG##*;}"
+    case "$bg_color" in
+      15|7|6|9|10|11|12|14) return 0 ;;  # light background colors
+    esac
+  fi
+  # Check for known light terminal profiles
+  case "$KONSOLE_PROFILE_NAME" in
+    *[Ll]ight*|*[Ww]hite*|*Solarized*[Ll]ight*) return 0 ;;
+  esac
+  case "$ITERM_PROFILE" in
+    *[Ll]ight*|*[Ww]hite*|*Solarized*[Ll]ight*) return 0 ;;
+  esac
+  # Check if terminal background color is set and appears light
+  case "$TERMINAL_BACKGROUND" in
+    [Ww]hite*|[Ll]ight*) return 0 ;;
+  esac
+  return 1  # assume dark
+}
+
+# Define theme-aware colors
+if detect_basic_terminal; then
+  # Basic terminal - use simple ANSI colors (0-7) that work everywhere
+  dim_color=7       # white/light grey
+  muted_color=7     # white/light grey
+  text_color=7      # white
+  divider_color=7   # white
+  note_color=7      # white
+  main_color=6      # cyan
+  link_color=4      # blue
+elif detect_light_terminal; then
+  dim_color=241      # dark grey - readable on white
+  muted_color=238    # darker grey for secondary text
+  text_color=236     # near-black for main descriptions
+  divider_color=250  # medium grey for dividers (visible on white)
+  note_color=243     # grey for notes
+else
+  dim_color=245      # light grey - readable on dark
+  muted_color=250    # lighter grey for secondary text
+  text_color=255     # near-white for main descriptions
+  divider_color=245  # grey for dividers
+  note_color=245     # grey for notes
+fi
+
+# Store basic terminal detection result for use in safe_input
+BASIC_TERMINAL=false
+if detect_basic_terminal; then
+  BASIC_TERMINAL=true
+fi
+
+# Safe input wrapper - uses simple read on basic terminals (serial consoles)
+# where gum input doesn't work well
+# Usage: result=$(safe_input "prompt" "default_value" [password])
+safe_input() {
+  local prompt="$1"
+  local default="$2"
+  local is_password="$3"
+  local result
+
+  if [[ "$BASIC_TERMINAL" == "true" ]]; then
+    # Basic terminal - use simple read
+    if [[ "$is_password" == "password" ]]; then
+      read -r -s -p "${prompt}: " result
+      echo "" >&2  # newline after hidden input
+    elif [[ -n "$default" ]]; then
+      read -r -p "${prompt} [${default}]: " result
+      result="${result:-$default}"
+    else
+      read -r -p "${prompt}: " result
+    fi
+    echo "$result"
+  else
+    # Normal terminal - use gum input
+    if [[ "$is_password" == "password" ]]; then
+      gum input --cursor.foreground "${main_color}" \
+        --prompt.foreground "${main_color}" \
+        --prompt "${prompt}: " \
+        --placeholder "" \
+        --password \
+        --width 60 \
+        --no-show-help \
+        --value "$default"
+    else
+      gum input --cursor.foreground "${main_color}" \
+        --prompt.foreground "${main_color}" \
+        --prompt "${prompt}: " \
+        --placeholder "" \
+        --width 60 \
+        --no-show-help \
+        --value "$default"
+    fi
+  fi
+}
+
+# Safe choose wrapper - numbered menu on basic terminals
+# Usage: result=$(safe_choose "option1" "option2" "option3")
+safe_choose() {
+  local options=("$@")
+  local i result
+
+  if [[ "$BASIC_TERMINAL" == "true" ]]; then
+    echo "" >&2
+    for i in "${!options[@]}"; do
+      echo "  $((i+1))) ${options[$i]}" >&2
+    done
+    echo "" >&2
+    while true; do
+      read -r -p "Enter choice [1-${#options[@]}]: " result
+      if [[ "$result" =~ ^[0-9]+$ ]] && [ "$result" -ge 1 ] && [ "$result" -le "${#options[@]}" ]; then
+        echo "${options[$((result-1))]}"
+        return 0
+      fi
+      echo "Invalid choice. Enter 1-${#options[@]}" >&2
+    done
+  else
+    gum choose --cursor.foreground "${main_color}" "${options[@]}"
+  fi
+}
+
+# Safe confirm wrapper - uses choose-style on basic terminals (toggle doesn't work well)
+# Usage: if safe_confirm "Are you sure?"; then ...
+safe_confirm() {
+  local prompt="${1:-Continue?}"
+  local yes_text="${2:-Yes}"
+  local no_text="${3:-No}"
+  local result
+
+  if [[ "$BASIC_TERMINAL" == "true" ]]; then
+    # Use gum choose style which works on serial consoles
+    echo "" >&2
+    echo "$prompt" >&2
+    result=$(gum choose --cursor.foreground "${main_color}" "$yes_text" "$no_text")
+    [[ "$result" == "$yes_text" ]]
+  else
+    gum confirm --prompt.foreground "${main_color}" "$prompt"
+  fi
+}
 
 #
 # EARLY DEPENDENCY CHECKS - must run before any gum usage
@@ -851,6 +1036,8 @@ check_python_and_ecdsa() {
   $PYTHON_CMD -c "import mospy" 2>/dev/null || missing_libs+=("mospy-wallet")
   $PYTHON_CMD -c "import httpx" 2>/dev/null || missing_libs+=("httpx")
   $PYTHON_CMD -c "import betterproto" 2>/dev/null || missing_libs+=("betterproto")
+  # Pure Python ripemd160 for systems where OpenSSL 3.0 has it disabled
+  $PYTHON_CMD -c "from ripemd.ripemd160 import ripemd160" 2>/dev/null || missing_libs+=("ripemd-hash")
 
   if [ ${#missing_libs[@]} -gt 0 ]; then
     echo "Installing required Python libraries: ${missing_libs[*]}..."
@@ -874,7 +1061,22 @@ check_python_and_ecdsa() {
     if [ "$install_success" = false ]; then
       echo "Creating Python virtual environment at ${NESA_VENV}..."
 
-      if python3 -m venv "${NESA_VENV}" 2>/dev/null; then
+      # Try creating venv - if it fails, try installing python3-venv (Linux only)
+      if ! python3 -m venv "${NESA_VENV}" 2>/dev/null; then
+        if [[ "$OSTYPE" == "linux"* ]] && command_exists apt-get; then
+          echo "Installing python3-venv and build dependencies..."
+          # Get Python version for the correct venv package
+          local py_version
+          py_version=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+          run_with_sudo apt-get update -qq
+          run_with_sudo apt-get install -y -qq "python${py_version}-venv" build-essential libffi-dev python3-dev 2>/dev/null || \
+          run_with_sudo apt-get install -y -qq python3-venv build-essential libffi-dev python3-dev 2>/dev/null
+          # Retry venv creation
+          python3 -m venv "${NESA_VENV}" 2>/dev/null
+        fi
+      fi
+
+      if [ -d "${NESA_VENV}" ]; then
         # shellcheck disable=SC1091
         source "${NESA_VENV}/bin/activate"
         PYTHON_CMD="${NESA_VENV}/bin/python3"
@@ -1027,23 +1229,23 @@ show_step_header() {
   if [ "$required" = "required" ]; then
     req_text=$(gum style --foreground 214 "This field is REQUIRED")
   else
-    req_text=$(gum style --foreground 245 "This field is OPTIONAL")
+    req_text=$(gum style --foreground "$dim_color" "This field is OPTIONAL")
   fi
 
   local help_text=""
   if [ -n "$help_link" ]; then
     help_text="
-$(gum style --foreground 250 "Get it at:") $(gum style --foreground "$link_color" "$help_link")"
+$(gum style --foreground "$muted_color" "Get it at:") $(gum style --foreground "$link_color" "$help_link")"
   fi
 
   echo ""
   gum style --border rounded --padding "1 2" --border-foreground "$main_color" \
     "$(gum style --foreground "$main_color" --bold "STEP $step_num OF $total_steps: $title")
 
-$(gum style --foreground 255 "$description")
+$(gum style --foreground "$text_color" "$description")
 
-$(gum style --foreground 250 "Format:") $(gum style --foreground "$link_color" "$format_info")
-$(gum style --foreground 250 "Example:") $(gum style --foreground 245 "$example")$help_text
+$(gum style --foreground "$muted_color" "Format:") $(gum style --foreground "$link_color" "$format_info")
+$(gum style --foreground "$muted_color" "Example:") $(gum style --foreground "$dim_color" "$example")$help_text
 
 $req_text"
   echo ""
@@ -1059,13 +1261,13 @@ show_input_summary() {
   echo ""
   if [ -n "$value" ]; then
     # Has value - show what they entered
-    gum style --foreground 245 "$label: $(gum style --foreground 255 --bold "$value")"
+    gum style --foreground "$dim_color" "$label: $(gum style --foreground "$text_color" --bold "$value")"
   elif [ "$required" = "required" ]; then
     # Empty but required
     gum style --foreground 214 "No value entered (required)"
   else
     # Empty but optional - that's fine
-    gum style --foreground 245 "$label: (skipped)"
+    gum style --foreground "$dim_color" "$label: (skipped)"
   fi
   echo ""
 }
@@ -1090,7 +1292,7 @@ wizard_nav() {
 # Return to main menu (restarts script)
 # Script will show main menu if config exists, or wizard if not
 return_to_main_menu() {
-  exec "$SCRIPT_PATH"
+  restart_script
 }
 
 # Validate wizard input - returns "ok" or "error|message"
@@ -1687,6 +1889,7 @@ derive_wallet_address() {
   ${NESA_PYTHON_CMD:-python3} -c "
 import hashlib
 import ecdsa
+from ripemd.ripemd160 import ripemd160
 
 def bech32_polymod(values):
     GEN = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3]
@@ -1737,7 +1940,7 @@ def private_key_to_address(private_key_hex, prefix='$prefix'):
     public_key_compressed = b'\x02' + vk.to_string()[:32] if vk.to_string()[-1] % 2 == 0 else b'\x03' + vk.to_string()[:32]
 
     sha256_hash = hashlib.sha256(public_key_compressed).digest()
-    ripemd160_hash = hashlib.new('ripemd160', sha256_hash).digest()
+    ripemd160_hash = ripemd160(sha256_hash)  # Pure Python - works on all systems
 
     five_bit_data = convertbits(ripemd160_hash, 8, 5)
     return bech32_encode(prefix, five_bit_data)
@@ -2050,12 +2253,22 @@ try:
         using_relay=False
     )
 
-    # Initial load to verify account exists
+    # Initial load to verify account exists (with retry for indexing delay)
     client = HTTPClient(api=lcd_url)
-    try:
-        client.load_account_data(account=account)
-    except Exception as load_err:
-        print(f"error|Account not found on chain. Please fund your wallet first: {wallet_address}")
+    account_loaded = False
+    account_retries = 5
+    for acc_attempt in range(account_retries):
+        try:
+            client.load_account_data(account=account)
+            account_loaded = True
+            break
+        except Exception as load_err:
+            if acc_attempt < account_retries - 1:
+                time.sleep(2 * (acc_attempt + 1))  # exponential backoff: 2s, 4s, 6s, 8s
+            continue
+
+    if not account_loaded:
+        print(f"error|Account not found on chain after {account_retries} attempts. If you just funded your wallet, please wait a moment and try again. Wallet: {wallet_address}")
         sys.exit(0)
 
     # Retry loop for sequence mismatch
@@ -2189,12 +2402,22 @@ try:
         model_name=model_name
     )
 
-    # Initial load to verify account exists
+    # Initial load to verify account exists (with retry for indexing delay)
     client = HTTPClient(api=lcd_url)
-    try:
-        client.load_account_data(account=account)
-    except Exception as load_err:
-        print(f"error|Account not found on chain. Please fund your wallet first: {wallet_address}")
+    account_loaded = False
+    account_retries = 5
+    for acc_attempt in range(account_retries):
+        try:
+            client.load_account_data(account=account)
+            account_loaded = True
+            break
+        except Exception as load_err:
+            if acc_attempt < account_retries - 1:
+                time.sleep(2 * (acc_attempt + 1))  # exponential backoff: 2s, 4s, 6s, 8s
+            continue
+
+    if not account_loaded:
+        print(f"error|Account not found on chain after {account_retries} attempts. If you just funded your wallet, please wait a moment and try again. Wallet: {wallet_address}")
         sys.exit(0)
 
     # Retry loop for sequence mismatch
@@ -2330,12 +2553,22 @@ try:
         hrp="nesa",
     )
 
-    # Initial load to verify account exists
+    # Initial load to verify account exists (with retry for indexing delay)
     client = HTTPClient(api=lcd_url)
-    try:
-        client.load_account_data(account=account)
-    except Exception as load_err:
-        print(f"error|Account not found on chain. Please fund your wallet first: {account.address}")
+    account_loaded = False
+    account_retries = 5
+    for acc_attempt in range(account_retries):
+        try:
+            client.load_account_data(account=account)
+            account_loaded = True
+            break
+        except Exception as load_err:
+            if acc_attempt < account_retries - 1:
+                time.sleep(2 * (acc_attempt + 1))  # exponential backoff: 2s, 4s, 6s, 8s
+            continue
+
+    if not account_loaded:
+        print(f"error|Account not found on chain after {account_retries} attempts. If you just funded your wallet, please wait a moment and try again. Wallet: {account.address}")
         sys.exit(0)
 
     if account.next_sequence is None:
@@ -2483,7 +2716,7 @@ $(gum style --foreground 69 "$wallet_address")
 Please send at least $(gum style --foreground 214 "$min_deposit_display NES") to this address.
 This will cover your minimum deposit plus transaction fees.
 
-$(gum style --foreground 245 "Get testnet tokens from the Nesa Playground faucet:")
+$(gum style --foreground "$dim_color" "Get testnet tokens from the Nesa Playground faucet:")
 $(gum style --foreground "$link_color" "https://beta.nesa.ai/faucet")"
       echo ""
 
@@ -2563,14 +2796,14 @@ $(gum style --foreground "$link_color" "https://beta.nesa.ai/faucet")"
 
       if [ "$node_tx_status" = "success" ]; then
         gum style --foreground 42 "[OK] Node registered"
-        gum style --foreground 245 "    TX: ${node_tx_data}"
+        gum style --foreground "$dim_color" "    TX: ${node_tx_data}"
         gum spin -s line --title "Waiting for confirmation..." -- sleep 5
       else
         echo ""
         gum style --border rounded --padding "1 2" --border-foreground 196 \
           "$(gum style --foreground 196 --bold "NODE REGISTRATION FAILED")
 
-  $(gum style --foreground 250 "Error:") $node_tx_data"
+  $(gum style --foreground "$muted_color" "Error:") $node_tx_data"
         echo ""
         read -p "> Press Enter to continue..."
         return 1
@@ -2609,7 +2842,7 @@ $(gum style --foreground "$link_color" "https://beta.nesa.ai/faucet")"
 
     if [ "$miner_tx_status" = "success" ]; then
       gum style --foreground 42 "[OK] Miner registered"
-      gum style --foreground 245 "    TX: ${miner_tx_data}"
+      gum style --foreground "$dim_color" "    TX: ${miner_tx_data}"
       gum spin -s line --title "Waiting for confirmation..." -- sleep 5
     else
       # Check if error is "miner already registered"
@@ -2620,7 +2853,7 @@ $(gum style --foreground "$link_color" "https://beta.nesa.ai/faucet")"
         gum style --border rounded --padding "1 2" --border-foreground 196 \
           "$(gum style --foreground 196 --bold "MINER REGISTRATION FAILED")
 
-  $(gum style --foreground 250 "Error:") $miner_tx_data"
+  $(gum style --foreground "$muted_color" "Error:") $miner_tx_data"
         echo ""
         read -p "> Press Enter to continue..."
         return 1
@@ -2683,24 +2916,24 @@ $(gum style --foreground "$link_color" "https://beta.nesa.ai/faucet")"
     gum style --border rounded --padding "1 2" --border-foreground "$status_color" \
       "$(gum style --foreground "$status_color" --bold "$status_text")
 
-$(gum style --foreground 250 "$status_desc")
+$(gum style --foreground "$muted_color" "$status_desc")
 
-  $(gum style --foreground 245 "─────────────────────────────────────────────────────────────────")
+  $(gum style --foreground "$dim_color" "─────────────────────────────────────────────────────────────────")
 
   $(gum style --foreground 43 "Wallet:")             ${wallet_address}
   $(gum style --foreground 43 "Balance:")            $(gum style --bold "${balance_display} NES")
 
-  $(gum style --foreground 245 "─────────────────────────────────────────────────────────────────")
+  $(gum style --foreground "$dim_color" "─────────────────────────────────────────────────────────────────")
 
   $(gum style --foreground 43 "Minimum Required:")   ${min_deposit_display} NES
   $(gum style --foreground 43 "Current Deposit:")    $(gum style --foreground $status_color "${current_deposit_display} NES")
   $(gum style --foreground 43 "Bond Status:")        $(gum style --foreground $status_color "${bond_status}")${amount_needed_line}
 
-  $(gum style --foreground 245 "─────────────────────────────────────────────────────────────────")
+  $(gum style --foreground "$dim_color" "─────────────────────────────────────────────────────────────────")
 
-  $(gum style --foreground 250 "Gas Fee:")            ~${gas_fee_display} NES
+  $(gum style --foreground "$muted_color" "Gas Fee:")            ~${gas_fee_display} NES
 
-$(gum style --foreground 245 --italic "Deposits are held in escrow and can be withdrawn after
+$(gum style --foreground "$dim_color" --italic "Deposits are held in escrow and can be withdrawn after
 a 7-day unbonding period.")"
 
     echo ""
@@ -2728,11 +2961,7 @@ a 7-day unbonding period.")"
     fi
 
     local deposit_amount
-    deposit_amount=$(gum input \
-      --placeholder "Enter deposit amount in NES" \
-      --value "$default_amount" \
-      --prompt "Deposit amount: " \
-      --prompt.foreground "$main_color")
+    deposit_amount=$(safe_input "Deposit amount (NES)" "$default_amount")
 
     echo ""
     local nav
@@ -2803,18 +3032,18 @@ a 7-day unbonding period.")"
     gum style --border rounded --padding "1 2" --border-foreground 43 \
       "$(gum style --foreground 43 --bold "CONFIRM TRANSACTION")
 
-  $(gum style --foreground 245 "─────────────────────────────────────────────────────────────────")
+  $(gum style --foreground "$dim_color" "─────────────────────────────────────────────────────────────────")
 
-  $(gum style --foreground 250 "Deposit Amount:")     ${deposit_amount} NES
-  $(gum style --foreground 250 "Gas Fee:")            ~${gas_fee_display} NES
-  $(gum style --foreground 245 "─────────────────────────────────────────────────────────────────")
+  $(gum style --foreground "$muted_color" "Deposit Amount:")     ${deposit_amount} NES
+  $(gum style --foreground "$muted_color" "Gas Fee:")            ~${gas_fee_display} NES
+  $(gum style --foreground "$dim_color" "─────────────────────────────────────────────────────────────────")
   $(gum style --foreground 43 "Total Cost:")          $(gum style --bold "${total_cost_display} NES")
 
-  $(gum style --foreground 245 "─────────────────────────────────────────────────────────────────")
+  $(gum style --foreground "$dim_color" "─────────────────────────────────────────────────────────────────")
 
-  $(gum style --foreground 250 "After Transaction:")
-  $(gum style --foreground 250 "Your Deposit:")       ${final_deposit_display} NES  $(gum style --foreground $meets_color "[$meets_minimum]")
-  $(gum style --foreground 250 "Remaining Balance:")  ${remaining_balance_display} NES"
+  $(gum style --foreground "$muted_color" "After Transaction:")
+  $(gum style --foreground "$muted_color" "Your Deposit:")       ${final_deposit_display} NES  $(gum style --foreground $meets_color "[$meets_minimum]")
+  $(gum style --foreground "$muted_color" "Remaining Balance:")  ${remaining_balance_display} NES"
 
     echo ""
 
@@ -2845,7 +3074,7 @@ a 7-day unbonding period.")"
           gum style --border rounded --padding "1 2" --border-foreground 42 \
             "$(gum style --foreground 42 --bold "DEPOSIT SUCCESSFUL")
 
-  $(gum style --foreground 250 "Transaction Hash:")
+  $(gum style --foreground "$muted_color" "Transaction Hash:")
   $(gum style --foreground 69 "$tx_data")
 
   Your deposit of ${deposit_amount} NES has been submitted.
@@ -2871,7 +3100,7 @@ a 7-day unbonding period.")"
           gum style --border rounded --padding "1 2" --border-foreground 196 \
             "$(gum style --foreground 196 --bold "DEPOSIT FAILED")
 
-  $(gum style --foreground 250 "Error:") $tx_data
+  $(gum style --foreground "$muted_color" "Error:") $tx_data
 
   Please try again or check your wallet balance."
           echo ""
@@ -3068,7 +3297,7 @@ Balance: $(gum style --foreground "$main_color" --bold "$balance_display NES")"
             "bonded") status_color="2" ;;  # green
             "unbonding") status_color="3" ;;  # yellow
             "unbonded") status_color="1" ;;  # red
-            "not_registered") status_color="8" ;;  # gray
+            "not_registered") status_color="$dim_color" ;;  # gray (theme-aware)
           esac
 
           gum style --border double --padding "1 2" --border-foreground "$main_color" \
@@ -3115,7 +3344,7 @@ Status:  $(gum style --foreground "$status_color" --bold "$bond_status")"
 Minimum Deposit:    $(gum style --foreground "$main_color" --bold "$miner_min_display $miner_denom")
 Unbonding Period:   $miner_unbond
 
-$(gum style --foreground "8" "Note: You can add deposits anytime. Withdrawals require the unbonding period.")"
+$(gum style --foreground "$note_color" "Note: You can add deposits anytime. Withdrawals require the unbonding period.")"
         else
           local error_msg=$(echo "$params_result" | cut -d'|' -f2-)
           echo "Error: $error_msg"
@@ -3456,13 +3685,13 @@ delete_node() {
   gum style --border rounded --padding "1 2" --border-foreground 196 \
     "$(gum style --foreground 196 --bold "PERMANENT NODE DELETION")
 
-$(gum style --foreground 250 "This action is") $(gum style --foreground 196 --bold "IRREVERSIBLE")$(gum style --foreground 250 ". All data will be permanently deleted:")
+$(gum style --foreground "$muted_color" "This action is") $(gum style --foreground 196 --bold "IRREVERSIBLE")$(gum style --foreground "$muted_color" ". All data will be permanently deleted:")
 
-  $(gum style --foreground 250 "•") Docker containers (orchestrator, watchtower, log-signer)
-  $(gum style --foreground 250 "•") Configuration files (~/.nesa/env/)
-  $(gum style --foreground 250 "•") Bootstrap logs (~/.nesa/logs/)
-  $(gum style --foreground 250 "•") Model cache (~/.nesa/cache/)
-  $(gum style --foreground 250 "•") Node identity files (~/.nesa/identity/)
+  $(gum style --foreground "$muted_color" "•") Docker containers (orchestrator, watchtower, log-signer)
+  $(gum style --foreground "$muted_color" "•") Configuration files (~/.nesa/env/)
+  $(gum style --foreground "$muted_color" "•") Bootstrap logs (~/.nesa/logs/)
+  $(gum style --foreground "$muted_color" "•") Model cache (~/.nesa/cache/)
+  $(gum style --foreground "$muted_color" "•") Node identity files (~/.nesa/identity/)
 
 $(gum style --foreground 196 --bold "WARNING: Your wallet private key will NOT be recoverable")
 $(gum style --foreground 196 "if you have not backed it up elsewhere.")"
@@ -3472,10 +3701,7 @@ $(gum style --foreground 196 "if you have not backed it up elsewhere.")"
 
   # Require typing DELETE to confirm
   local confirm_text
-  confirm_text=$(gum input \
-    --prompt "Type DELETE to confirm permanent deletion: " \
-    --placeholder "" \
-    --prompt.foreground 196)
+  confirm_text=$(safe_input "Type DELETE to confirm permanent deletion" "")
 
   if [ "$confirm_text" != "DELETE" ]; then
     echo ""
@@ -3488,10 +3714,7 @@ $(gum style --foreground 196 "if you have not backed it up elsewhere.")"
   echo ""
 
   # Final confirmation
-  if ! gum confirm --prompt.foreground 196 \
-    --affirmative "Yes, delete everything" \
-    --negative "No, cancel" \
-    "Are you absolutely sure?"; then
+  if ! safe_confirm "Are you absolutely sure?" "Yes, delete everything" "No, cancel"; then
     echo ""
     gum style --foreground 214 "Deletion cancelled."
     log_line "[ACTION] Node deletion cancelled at final confirmation"
@@ -3526,7 +3749,7 @@ $(gum style --foreground 196 "if you have not backed it up elsewhere.")"
   echo ""
   gum style --foreground 42 --bold "Node deleted successfully."
   echo ""
-  gum style --foreground 250 "You can run the bootstrap script again to set up a new node."
+  gum style --foreground "$muted_color" "You can run the bootstrap script again to set up a new node."
   sleep 3
 
   exit 0
@@ -3640,14 +3863,14 @@ show_node_status() {
     "running") orch_status_color=42 ;;  # green
     "exited"|"dead") orch_status_color=196 ;;  # red
     "restarting") orch_status_color=214 ;;  # yellow
-    *) orch_status_color=245 ;;  # gray
+    *) orch_status_color=$dim_color ;;  # gray (theme-aware)
   esac
 
   case "$wt_status" in
     "running") wt_status_color=42 ;;
     "exited"|"dead") wt_status_color=196 ;;
     "restarting") wt_status_color=214 ;;
-    *) wt_status_color=245 ;;
+    *) wt_status_color=$dim_color ;;  # gray (theme-aware)
   esac
 
   # Overall status - check both running state AND health check result
@@ -3670,7 +3893,7 @@ show_node_status() {
     overall_msg="Orchestrator is restarting, please wait..."
   elif [ "$orch_status" = "not_found" ]; then
     overall_status="NOT STARTED"
-    overall_color=245
+    overall_color=$dim_color
     overall_msg="Node containers have not been started yet"
   else
     overall_status="UNHEALTHY"
@@ -3687,12 +3910,12 @@ $overall_msg"
   echo ""
 
   # Container table using ANSI colors (gum style --inline not available in all versions)
-  # Color codes: 32=green, 31=red, 33=yellow, 90=gray
+  # Using 256-color codes for theme awareness: \033[38;5;XXXm
   local color_reset="\033[0m"
   local color_green="\033[32m"
   local color_red="\033[31m"
   local color_yellow="\033[33m"
-  local color_gray="\033[90m"
+  local color_gray="\033[38;5;${dim_color}m"
 
   # Map status colors to ANSI
   local orch_ansi wt_ansi
@@ -3721,19 +3944,7 @@ $overall_msg"
 
   echo -e "${color_gray}─────────────────────────────────────────────────────────────────${color_reset}"
 
-  # Show recent errors if orchestrator is not healthy
-  if [ "$orch_health" = "unhealthy" ] || { [ "$orch_status" != "running" ] && [ "$orch_status" != "not_found" ]; }; then
-    echo ""
-    gum style --foreground 196 --bold "Recent Logs:"
-    local err_container
-    err_container=$(find_container "orchestrator")
-    if [ -n "$err_container" ]; then
-      docker logs "$err_container" --tail 10 2>&1 | while read -r line; do
-        echo "  $line"
-      done
-    fi
-  fi
-
+  # Users can use "View Logs" menu option for detailed logs
   echo ""
 }
 
@@ -3747,9 +3958,9 @@ stream_logs() {
 
   echo ""
   gum style --bold --foreground "$main_color" "LIVE LOGS: $container"
-  gum style --foreground 245 "Press Ctrl+C to stop and return to menu"
+  gum style --foreground "$dim_color" "Press Ctrl+C to stop and return to menu"
   echo ""
-  gum style --foreground 245 "─────────────────────────────────────────────────────────────────"
+  gum style --foreground "$dim_color" "─────────────────────────────────────────────────────────────────"
   echo ""
 
   # Find actual container name
@@ -3763,7 +3974,7 @@ stream_logs() {
   fi
 
   # Stream logs with trap to handle Ctrl+C gracefully
-  trap 'echo ""; gum style --foreground 245 "Stopped log streaming."; sleep 1; return 0' INT
+  trap 'echo ""; gum style --foreground "$dim_color" "Stopped log streaming."; sleep 1; return 0' INT
 
   docker logs -f --tail "$tail_lines" "$actual_container" 2>&1
 
@@ -3799,7 +4010,7 @@ show_status_and_logs_menu() {
         echo ""
         gum style --bold --foreground "$main_color" "LAST 100 LOG LINES"
         echo ""
-        gum style --foreground 245 "─────────────────────────────────────────────────────────────────"
+        gum style --foreground "$dim_color" "─────────────────────────────────────────────────────────────────"
         echo ""
 
         local orch_container
@@ -3813,7 +4024,7 @@ show_status_and_logs_menu() {
         fi
 
         echo ""
-        gum style --foreground 245 "─────────────────────────────────────────────────────────────────"
+        gum style --foreground "$dim_color" "─────────────────────────────────────────────────────────────────"
         echo ""
         read -r -s -p "Press Enter to continue..." && echo
         ;;
@@ -3823,7 +4034,7 @@ show_status_and_logs_menu() {
         echo ""
         gum style --bold --foreground "$main_color" "WATCHTOWER LOGS (Last 50 lines)"
         echo ""
-        gum style --foreground 245 "─────────────────────────────────────────────────────────────────"
+        gum style --foreground "$dim_color" "─────────────────────────────────────────────────────────────────"
         echo ""
 
         local wt_container
@@ -3837,7 +4048,7 @@ show_status_and_logs_menu() {
         fi
 
         echo ""
-        gum style --foreground 245 "─────────────────────────────────────────────────────────────────"
+        gum style --foreground "$dim_color" "─────────────────────────────────────────────────────────────────"
         echo ""
         read -r -s -p "Press Enter to continue..." && echo
         ;;
@@ -4197,13 +4408,7 @@ while true; do
         "my-mining-node, server-01, nesa-validator" \
         "required"
 
-      MONIKER=$(gum input --cursor.foreground "${main_color}" \
-        --prompt.foreground "${main_color}" \
-        --prompt "Node name: " \
-        --placeholder "${MONIKER:-my-node}" \
-        --width 60 \
-        --no-show-help \
-        --value "$MONIKER")
+      MONIKER=$(safe_input "Node name" "${MONIKER:-my-node}")
       MONIKER=$(echo "$MONIKER" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 
       # Show what user entered
@@ -4215,7 +4420,7 @@ while true; do
         log_line "[ERROR] Moniker validation failed: ${validation#error|}"
         gum style --foreground 196 "  ${validation#error|}"
         echo ""
-        if gum confirm "" --affirmative "Try Again" --negative "Cancel"; then
+        if safe_confirm "" "Try Again" "Cancel"; then
           continue
         else
           return_to_main_menu
@@ -4223,7 +4428,7 @@ while true; do
       fi
 
       # Navigation (first step - no back)
-      if gum confirm "" --affirmative "Continue →" --negative "Cancel"; then
+      if safe_confirm "" "Continue →" "Cancel"; then
         log_line "[SETUP] Moniker set: $MONIKER"
         wizard_step=2
       else
@@ -4238,13 +4443,7 @@ while true; do
         "nesa1abc123def456ghi789jkl012mno345pqr678st" \
         "optional"
 
-      REF_CODE=$(gum input --cursor.foreground "${main_color}" \
-        --prompt.foreground "${main_color}" \
-        --prompt "Referral code: " \
-        --placeholder "" \
-        --width 60 \
-        --no-show-help \
-        --value "$REF_CODE")
+      REF_CODE=$(safe_input "Referral code" "$REF_CODE")
 
       # Show what user entered
       show_input_summary "Referral code" "$REF_CODE" "optional"
@@ -4285,14 +4484,7 @@ while true; do
         "optional" \
         "https://huggingface.co/settings/tokens"
 
-      HUGGINGFACE_API_KEY=$(gum input --cursor.foreground "${main_color}" \
-        --prompt.foreground "${main_color}" \
-        --prompt "API key: " \
-        --placeholder "" \
-        --password \
-        --width 60 \
-        --no-show-help \
-        --value "$HUGGINGFACE_API_KEY")
+      HUGGINGFACE_API_KEY=$(safe_input "API key" "$HUGGINGFACE_API_KEY" "password")
 
       # Show what user entered (masked for security)
       if [ -n "$HUGGINGFACE_API_KEY" ]; then
@@ -4341,10 +4533,10 @@ while true; do
       gum style --border rounded --padding "1 2" --border-foreground "$main_color" \
         "$(gum style --foreground "$main_color" --bold "STEP 4 OF 4: WALLET SETUP")
 
-$(gum style --foreground 255 "Your wallet holds NES for staking and rewards.")
-$(gum style --foreground 255 "You need a secp256k1 private key (same as Ethereum).")
+$(gum style --foreground "$text_color" "Your wallet holds NES for staking and rewards.")
+$(gum style --foreground "$text_color" "You need a secp256k1 private key (same as Ethereum).")
 
-$(gum style --foreground 245 "Select an option below")"
+$(gum style --foreground "$dim_color" "Select an option below")"
       echo ""
 
       # Different options based on whether key already exists
@@ -4408,20 +4600,15 @@ $(gum style --foreground 245 "Select an option below")"
       gum style --border rounded --padding "1 2" --border-foreground "$main_color" \
         "$(gum style --foreground "$main_color" --bold "ENTER PRIVATE KEY")
 
-$(gum style --foreground 255 "Your wallet's private key (secp256k1, same as Ethereum).")
+$(gum style --foreground "$text_color" "Your wallet's private key (secp256k1, same as Ethereum).")
 
-$(gum style --foreground 250 "Format:") $(gum style --foreground "$link_color" "64 hexadecimal characters (with or without 0x prefix)")
-$(gum style --foreground 250 "Example:") $(gum style --foreground 245 "0x1a2b3c4d5e6f... or 1a2b3c4d5e6f...")
+$(gum style --foreground "$muted_color" "Format:") $(gum style --foreground "$link_color" "64 hexadecimal characters (with or without 0x prefix)")
+$(gum style --foreground "$muted_color" "Example:") $(gum style --foreground "$dim_color" "0x1a2b3c4d5e6f... or 1a2b3c4d5e6f...")
 
 $(gum style --foreground 196 "WARNING: Never share your private key with anyone!")"
       echo ""
 
-      NODE_PRIV_KEY=$(gum input --cursor.foreground "${main_color}" \
-        --password \
-        --prompt.foreground "${main_color}" \
-        --prompt "Private key: " \
-        --width 70 \
-        --no-show-help)
+      NODE_PRIV_KEY=$(safe_input "Private key" "" "password")
 
       # Show what user entered (masked)
       if [ -n "$NODE_PRIV_KEY" ]; then
@@ -4471,10 +4658,10 @@ $(gum style --foreground 196 "WARNING: Never share your private key with anyone!
       gum style --border rounded --padding "1 2" --border-foreground 214 \
         "$(gum style --foreground 214 --bold "VERIFY YOUR WALLET")
 
-$(gum style --foreground 255 "Derived wallet address:")
+$(gum style --foreground "$text_color" "Derived wallet address:")
 $(gum style --foreground "$link_color" --bold "$derived_address")
 
-$(gum style --foreground 250 "Does this match your expected wallet address?")"
+$(gum style --foreground "$muted_color" "Does this match your expected wallet address?")"
       echo ""
 
       verify_choice=$(gum choose --header="" --no-show-help --cursor.foreground "$main_color" \
@@ -4514,31 +4701,31 @@ $(gum style --foreground 250 "Does this match your expected wallet address?")"
 $(gum style --foreground 196 --bold "IMPORTANT: SAVE THIS PRIVATE KEY NOW!")
 $(gum style --foreground 196 "This is the ONLY time it will be displayed.")
 
-$(gum style --foreground 245 "─────────────────────────────────────────────────────────────")
+$(gum style --foreground "$dim_color" "─────────────────────────────────────────────────────────────")
 
 $(gum style --foreground "$main_color" "Private Key:")
-$(gum style --foreground 255 --bold "$NODE_PRIV_KEY")
+$(gum style --foreground "$text_color" --bold "$NODE_PRIV_KEY")
 
 $(gum style --foreground "$main_color" "Wallet Address:")
-$(gum style --foreground 255 "$new_wallet_address")
+$(gum style --foreground "$text_color" "$new_wallet_address")
 
 $(gum style --foreground "$main_color" "Public Key:")
-$(gum style --foreground 255 "$new_public_key")
+$(gum style --foreground "$text_color" "$new_public_key")
 
-$(gum style --foreground 245 "─────────────────────────────────────────────────────────────")
+$(gum style --foreground "$dim_color" "─────────────────────────────────────────────────────────────")
 
-$(gum style --foreground 250 "Store your private key securely. Anyone with this key")
-$(gum style --foreground 250 "can access your wallet and funds.")"
+$(gum style --foreground "$muted_color" "Store your private key securely. Anyone with this key")
+$(gum style --foreground "$muted_color" "can access your wallet and funds.")"
 
       echo ""
 
       # Make them confirm they saved it
-      if ! gum confirm --prompt.foreground 214 "I have saved my private key securely"; then
+      if ! safe_confirm "I have saved my private key securely" "Yes" "No"; then
         log_line "[WALLET] User did not confirm key saved - showing key again"
         echo ""
         gum style --foreground 214 "Please save your private key before continuing!"
         echo ""
-        gum style --foreground 255 "Private Key: $NODE_PRIV_KEY"
+        gum style --foreground "$text_color" "Private Key: $NODE_PRIV_KEY"
         echo ""
         read -r -s -p "Press Enter once you have saved it..." && echo
       fi
@@ -4552,9 +4739,9 @@ Before your node can register and start mining, you need
 to fund your wallet with NES.
 
 $(gum style --foreground "$main_color" "Send tokens to:")
-$(gum style --foreground 255 --bold "$new_wallet_address")
+$(gum style --foreground "$text_color" --bold "$new_wallet_address")
 
-$(gum style --foreground 245 "Get testnet tokens from the Nesa Playground faucet:")
+$(gum style --foreground "$dim_color" "Get testnet tokens from the Nesa Playground faucet:")
 $(gum style --foreground "$link_color" "https://beta.nesa.ai/faucet")"
 
       echo ""
@@ -4642,7 +4829,7 @@ if [ "$post_config_choice" != "Start Node Now" ]; then
   echo ""
   gum style --foreground "$main_color" "Configuration saved. Returning to main menu..."
   sleep 1
-  exec "$SCRIPT_PATH"  # Restart script to show main menu
+  restart_script  # Restart script to show main menu
 fi
 
 log_line "[SETUP] User chose: Start Node Now"
@@ -4667,7 +4854,7 @@ if [ "$deposit_result" -eq 2 ]; then
   echo ""
   gum style --foreground "$main_color" "Returning to main menu. You can fund your wallet and try again later."
   sleep 2
-  exec "$SCRIPT_PATH"
+  restart_script
 elif [ "$deposit_result" -eq 1 ]; then
   # Actual error
   log_line "[ERROR] Deposit check failed"
@@ -4682,7 +4869,7 @@ Could not verify deposit status. This may be due to:
 Please fund your wallet and try again."
   echo ""
   read -r -s -p "Press Enter to return to main menu..." && echo
-  exec "$SCRIPT_PATH"
+  restart_script
 fi
 
 cd "$WORKING_DIRECTORY/docker" || {
@@ -4724,7 +4911,7 @@ while true; do
       ;;
     "Return to Main Menu")
       log_line "[MENU] Post-setup: Return to Main Menu"
-      exec "$SCRIPT_PATH"
+      restart_script
       ;;
     "Exit"|"")
       log_line "[ACTION] User exited after successful setup"
