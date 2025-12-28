@@ -4728,16 +4728,24 @@ $(gum style --foreground "$muted_color" "can access your wallet and funds.")"
       echo ""
 
       # Make them confirm they saved it
-      if ! safe_confirm "I have saved my private key securely" "Yes" "No"; then
-        log_line "[WALLET] User did not confirm key saved - showing key again"
+      while true; do
         echo ""
-        gum style --foreground 214 "Please save your private key before continuing!"
-        echo ""
-        gum style --foreground "$text_color" "Private Key: $NODE_PRIV_KEY"
-        echo ""
-        read -r -s -p "Press Enter once you have saved it..." && echo
-      fi
-      log_line "[WALLET] User confirmed private key saved"
+        gum style --foreground "$main_color" "Have you saved your private key securely?"
+        save_confirm=$(gum choose --header="" --no-show-help --cursor.foreground "$main_color" \
+          "Yes, I have saved it" \
+          "Show key again")
+
+        if [ "$save_confirm" = "Yes, I have saved it" ]; then
+          log_line "[WALLET] User confirmed private key saved"
+          break
+        else
+          log_line "[WALLET] User requested to see key again"
+          echo ""
+          gum style --foreground 214 "Please save your private key before continuing!"
+          echo ""
+          gum style --foreground "$text_color" "Private Key: $NODE_PRIV_KEY"
+        fi
+      done
 
       echo ""
       gum style --border rounded --padding "1 2" --border-foreground "$main_color" \
