@@ -356,16 +356,19 @@ main_color=43
 link_color=69
 
 # Detect if running on a serial console or basic terminal with limited color support
+# Can be forced with BASIC_TERMINAL=true environment variable
 detect_basic_terminal() {
+  # Allow override via environment
+  [[ "$BASIC_TERMINAL" == "true" ]] && return 0
   # Check for serial console (ttyS*, ttyAMA*, ttyUSB*, etc.)
   local tty_name
   tty_name=$(tty 2>/dev/null || echo "")
   case "$tty_name" in
-    /dev/ttyS*|/dev/ttyAMA*|/dev/ttyUSB*|/dev/hvc*) return 0 ;;
+    /dev/ttyS*|/dev/ttyAMA*|/dev/ttyUSB*|/dev/hvc*|/dev/tty[0-9]*|/dev/console) return 0 ;;
   esac
   # Check TERM variable for basic terminals
   case "$TERM" in
-    dumb|vt100|vt220|linux|screen) return 0 ;;
+    dumb|vt100|vt102|vt220|vt320|linux|screen|ansi|cons*) return 0 ;;
   esac
   # No TERM set usually means basic terminal
   [[ -z "$TERM" ]] && return 0
@@ -474,12 +477,29 @@ safe_input() {
 
 # Safe choose wrapper - numbered menu on basic terminals
 # Usage: result=$(safe_choose "option1" "option2" "option3")
+# Usage with header: result=$(safe_choose --header "Pick one:" "option1" "option2")
 safe_choose() {
-  local options=("$@")
+  local header=""
+  local options=()
   local i result
+
+  # Parse --header option
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --header)
+        header="$2"
+        shift 2
+        ;;
+      *)
+        options+=("$1")
+        shift
+        ;;
+    esac
+  done
 
   if [[ "$BASIC_TERMINAL" == "true" ]]; then
     echo "" >&2
+    [[ -n "$header" ]] && echo "$header" >&2 && echo "" >&2
     for i in "${!options[@]}"; do
       echo "  $((i+1))) ${options[$i]}" >&2
     done
@@ -493,7 +513,7 @@ safe_choose() {
       echo "Invalid choice. Enter 1-${#options[@]}" >&2
     done
   else
-    gum choose --cursor.foreground "${main_color}" "${options[@]}"
+    gum choose --cursor.foreground "${main_color}" --no-show-help "${options[@]}"
   fi
 }
 
@@ -4420,9 +4440,7 @@ while true; do
         log_line "[ERROR] Moniker validation failed: ${validation#error|}"
         gum style --foreground 196 "  ${validation#error|}"
         echo ""
-        err_choice=$(gum choose --header="" --no-show-help --cursor.foreground "$main_color" \
-          "Try Again" \
-          "Return to Main Menu")
+        err_choice=$(safe_choose "Try Again" "Return to Main Menu")
         case "$err_choice" in
           "Try Again") continue ;;
           "Return to Main Menu"|"") return_to_main_menu ;;
@@ -4430,11 +4448,9 @@ while true; do
       fi
 
       # Navigation (first step - no back option)
-      nav_choice=$(gum choose --header="" --no-show-help --cursor.foreground "$main_color" \
-        "Continue →" \
-        "Return to Main Menu")
+      nav_choice=$(safe_choose "Continue" "Return to Main Menu")
       case "$nav_choice" in
-        "Continue →")
+        "Continue")
           log_line "[SETUP] Moniker set: $MONIKER"
           wizard_step=2
           ;;
@@ -4461,25 +4477,19 @@ while true; do
       if [ "${validation%%|*}" = "error" ]; then
         gum style --foreground 196 "  ${validation#error|}"
         echo ""
-        err_choice=$(gum choose --header="" --no-show-help --cursor.foreground "$main_color" \
-          "Try Again" \
-          "← Back" \
-          "Return to Main Menu")
+        err_choice=$(safe_choose "Try Again" "Back" "Return to Main Menu")
         case "$err_choice" in
           "Try Again") continue ;;
-          "← Back") wizard_step=1; continue ;;
+          "Back") wizard_step=1; continue ;;
           "Return to Main Menu"|"") return_to_main_menu ;;
         esac
       fi
 
       # Navigation
-      nav_choice=$(gum choose --header="" --no-show-help --cursor.foreground "$main_color" \
-        "Continue →" \
-        "← Back" \
-        "Return to Main Menu")
+      nav_choice=$(safe_choose "Continue" "Back" "Return to Main Menu")
       case "$nav_choice" in
-        "Continue →") wizard_step=3 ;;
-        "← Back") wizard_step=1 ;;
+        "Continue") wizard_step=3 ;;
+        "Back") wizard_step=1 ;;
         "Return to Main Menu"|"") return_to_main_menu ;;
       esac
       ;;
@@ -4507,13 +4517,10 @@ while true; do
       if [ "${validation%%|*}" = "error" ]; then
         gum style --foreground 196 "  ${validation#error|}"
         echo ""
-        err_choice=$(gum choose --header="" --no-show-help --cursor.foreground "$main_color" \
-          "Try Again" \
-          "← Back" \
-          "Return to Main Menu")
+        err_choice=$(safe_choose "Try Again" "Back" "Return to Main Menu")
         case "$err_choice" in
           "Try Again") continue ;;
-          "← Back") wizard_step=2; continue ;;
+          "Back") wizard_step=2; continue ;;
           "Return to Main Menu"|"") return_to_main_menu ;;
         esac
       fi
@@ -4525,13 +4532,10 @@ while true; do
       fi
 
       # Navigation
-      nav_choice=$(gum choose --header="" --no-show-help --cursor.foreground "$main_color" \
-        "Continue →" \
-        "← Back" \
-        "Return to Main Menu")
+      nav_choice=$(safe_choose "Continue" "Back" "Return to Main Menu")
       case "$nav_choice" in
-        "Continue →") wizard_step=4 ;;
-        "← Back") wizard_step=2 ;;
+        "Continue") wizard_step=4 ;;
+        "Back") wizard_step=2 ;;
         "Return to Main Menu"|"") return_to_main_menu ;;
       esac
       ;;
@@ -4549,11 +4553,11 @@ $(gum style --foreground "$dim_color" "Select an option below")"
 
       # Different options based on whether key already exists
       if [ -n "$existing_key_saved" ]; then
-        wallet_choice=$(gum choose --header="" --no-show-help --cursor.foreground "$main_color" \
+        wallet_choice=$(safe_choose \
           "Use existing private key" \
           "Enter different private key" \
           "Generate new wallet" \
-          "← Back" \
+          "Back" \
           "Return to Main Menu")
 
         case "$wallet_choice" in
@@ -4570,7 +4574,7 @@ $(gum style --foreground "$dim_color" "Select an option below")"
             log_line "[WALLET] User chose: Generate new wallet"
             wizard_step=6
             ;;
-          "← Back")
+          "Back")
             wizard_step=3
             ;;
           "Return to Main Menu"|"")
@@ -4578,10 +4582,10 @@ $(gum style --foreground "$dim_color" "Select an option below")"
             ;;
         esac
       else
-        wallet_choice=$(gum choose --header="" --no-show-help --cursor.foreground "$main_color" \
+        wallet_choice=$(safe_choose \
           "Enter existing private key" \
           "Generate new wallet" \
-          "← Back" \
+          "Back" \
           "Return to Main Menu")
 
         case "$wallet_choice" in
@@ -4593,7 +4597,7 @@ $(gum style --foreground "$dim_color" "Select an option below")"
             log_line "[WALLET] User chose: Generate new wallet"
             wizard_step=6
             ;;
-          "← Back")
+          "Back")
             wizard_step=3
             ;;
           "Return to Main Menu"|"")
@@ -4632,13 +4636,10 @@ $(gum style --foreground 196 "WARNING: Never share your private key with anyone!
         log_line "[ERROR] Private key validation failed: ${validation#error|}"
         gum style --foreground 196 "  ${validation#error|}"
         echo ""
-        err_choice=$(gum choose --header="" --no-show-help --cursor.foreground "$main_color" \
-          "Try Again" \
-          "← Back" \
-          "Return to Main Menu")
+        err_choice=$(safe_choose "Try Again" "Back" "Return to Main Menu")
         case "$err_choice" in
           "Try Again") continue ;;
-          "← Back") wizard_step=4; continue ;;
+          "Back") wizard_step=4; continue ;;
           "Return to Main Menu"|"") return_to_main_menu ;;
         esac
       fi
@@ -4672,17 +4673,13 @@ $(gum style --foreground "$link_color" --bold "$derived_address")
 $(gum style --foreground "$muted_color" "Does this match your expected wallet address?")"
       echo ""
 
-      verify_choice=$(gum choose --header="" --no-show-help --cursor.foreground "$main_color" \
-        "Yes, correct" \
-        "Re-enter" \
-        "← Back" \
-        "Return to Main Menu")
+      verify_choice=$(safe_choose "Yes, correct" "Re-enter" "Back" "Return to Main Menu")
       case "$verify_choice" in
         "Yes, correct")
           log_line "[WALLET] Private key imported - address: $derived_address"
           break ;;  # Exit wizard with key
         "Re-enter") NODE_PRIV_KEY="" ;;  # Stay on step 5
-        "← Back") wizard_step=4 ;;
+        "Back") wizard_step=4 ;;
         "Return to Main Menu"|"") return_to_main_menu ;;
       esac
       ;;
@@ -4731,9 +4728,7 @@ $(gum style --foreground "$muted_color" "can access your wallet and funds.")"
       while true; do
         echo ""
         gum style --foreground "$main_color" "Have you saved your private key securely?"
-        save_confirm=$(gum choose --header="" --no-show-help --cursor.foreground "$main_color" \
-          "Yes, I have saved it" \
-          "Show key again")
+        save_confirm=$(safe_choose "Yes, I have saved it" "Show key again")
 
         if [ "$save_confirm" = "Yes, I have saved it" ]; then
           log_line "[WALLET] User confirmed private key saved"
@@ -4765,11 +4760,11 @@ $(gum style --foreground "$link_color" "https://beta.nesa.ai/faucet")"
       # Check balance loop
       go_back=false
       while true; do
-        fund_choice=$(gum choose --header="" --no-show-help \
-          --cursor.foreground "$main_color" \
+        fund_choice=$(safe_choose \
           "Check Balance" \
           "Continue (I'll fund it later)" \
-          "← Back")
+          "Back" \
+          "Return to Main Menu")
 
         if [ "$fund_choice" = "Check Balance" ]; then
           gum spin -s line --title "Checking wallet balance..." -- sleep 1
@@ -4784,24 +4779,23 @@ $(gum style --foreground "$link_color" "https://beta.nesa.ai/faucet")"
             gum style --foreground 42 "Balance: $balance_display NES"
             echo ""
             # Ask what to do next after successful balance check
-            next_choice=$(gum choose --header="" --no-show-help \
-              --cursor.foreground "$main_color" \
-              "Continue →" \
-              "Check Again" \
-              "← Back")
+            next_choice=$(safe_choose "Continue" "Check Again" "Back" "Return to Main Menu")
             case "$next_choice" in
-              "Continue →") break ;;
+              "Continue") break ;;
               "Check Again") continue ;;
-              "← Back"|"") go_back=true; break ;;
+              "Back"|"") go_back=true; break ;;
+              "Return to Main Menu") return_to_main_menu ;;
             esac
           else
             gum style --foreground 214 "Balance: 0 NES - Wallet not funded yet"
             echo ""
             # Stay in loop to let user check again
           fi
-        elif [ -z "$fund_choice" ] || [ "$fund_choice" = "← Back" ]; then
+        elif [ -z "$fund_choice" ] || [ "$fund_choice" = "Back" ]; then
           go_back=true
           break
+        elif [ "$fund_choice" = "Return to Main Menu" ]; then
+          return_to_main_menu
         else
           # "Continue (I'll fund it later)"
           echo ""
@@ -4848,11 +4842,7 @@ echo ""
 echo "What would you like to do?"
 echo ""
 
-post_config_choice=$(gum choose \
-  --cursor.foreground "$main_color" \
-  --item.foreground "$link_color" \
-  "Start Node Now" \
-  "Return to Main Menu")
+post_config_choice=$(safe_choose "Start Node Now" "Return to Main Menu")
 
 if [ "$post_config_choice" != "Start Node Now" ]; then
   log_line "[SETUP] User chose: Return to Main Menu (configuration saved)"
@@ -4920,9 +4910,7 @@ while true; do
   echo "What would you like to do next?"
   echo ""
 
-  post_setup_choice=$(gum choose \
-    --cursor.foreground "$main_color" \
-    --item.foreground "$link_color" \
+  post_setup_choice=$(safe_choose \
     "View Node Status & Logs" \
     "Manage Wallet & Deposits" \
     "Return to Main Menu" \
