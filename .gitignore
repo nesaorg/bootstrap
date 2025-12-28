@@ -6,3 +6,9 @@ expect.log
 .claude
 
 
+*.md
+!docs/*.md
+!FAQ.md
+!readme.md
+!Troubleshooting.md
+!LICENSE.md
