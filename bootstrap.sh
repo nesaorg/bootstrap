@@ -366,9 +366,15 @@ detect_basic_terminal() {
   case "$tty_name" in
     /dev/ttyS*|/dev/ttyAMA*|/dev/ttyUSB*|/dev/hvc*|/dev/tty[0-9]*|/dev/console) return 0 ;;
   esac
+  # If not on a pseudo-terminal (pts), likely a basic terminal
+  # Cloud VM consoles (AWS, GCP, Azure serial) often aren't pts
+  case "$tty_name" in
+    /dev/pts/*) ;;  # pseudo-terminal, probably fine
+    *) [[ -n "$tty_name" ]] && return 0 ;;  # not pts, treat as basic
+  esac
   # Check TERM variable for basic terminals
   case "$TERM" in
-    dumb|vt100|vt102|vt220|vt320|linux|screen|ansi|cons*) return 0 ;;
+    dumb|vt100|vt102|vt220|vt320|linux|screen|ansi|cons*|putty*|serial*) return 0 ;;
   esac
   # No TERM set usually means basic terminal
   [[ -z "$TERM" ]] && return 0
@@ -431,17 +437,17 @@ if detect_basic_terminal; then
   BASIC_TERMINAL=true
 fi
 
-# Safe input wrapper - uses simple read on basic terminals (serial consoles)
-# where gum input doesn't work well
+# Safe input wrapper - uses simple read as fallback if gum fails
 # Usage: result=$(safe_input "prompt" "default_value" [password])
 safe_input() {
   local prompt="$1"
   local default="$2"
   local is_password="$3"
   local result
+  local gum_failed=false
 
-  if [[ "$BASIC_TERMINAL" == "true" ]]; then
-    # Basic terminal - use simple read
+  # Helper for read-based input
+  _read_input() {
     if [[ "$is_password" == "password" ]]; then
       read -r -s -p "${prompt}: " result
       echo "" >&2  # newline after hidden input
@@ -452,30 +458,43 @@ safe_input() {
       read -r -p "${prompt}: " result
     fi
     echo "$result"
+  }
+
+  # If forced basic terminal, use read directly
+  if [[ "$BASIC_TERMINAL" == "true" ]]; then
+    _read_input
+    return
+  fi
+
+  # Try gum input, fall back to read if it fails
+  if [[ "$is_password" == "password" ]]; then
+    result=$(gum input --cursor.foreground "${main_color}" \
+      --prompt.foreground "${main_color}" \
+      --prompt "${prompt}: " \
+      --placeholder "" \
+      --password \
+      --width 60 \
+      --no-show-help \
+      --value "$default" 2>/dev/null) || gum_failed=true
   else
-    # Normal terminal - use gum input
-    if [[ "$is_password" == "password" ]]; then
-      gum input --cursor.foreground "${main_color}" \
-        --prompt.foreground "${main_color}" \
-        --prompt "${prompt}: " \
-        --placeholder "" \
-        --password \
-        --width 60 \
-        --no-show-help \
-        --value "$default"
-    else
-      gum input --cursor.foreground "${main_color}" \
-        --prompt.foreground "${main_color}" \
-        --prompt "${prompt}: " \
-        --placeholder "" \
-        --width 60 \
-        --no-show-help \
-        --value "$default"
-    fi
+    result=$(gum input --cursor.foreground "${main_color}" \
+      --prompt.foreground "${main_color}" \
+      --prompt "${prompt}: " \
+      --placeholder "" \
+      --width 60 \
+      --no-show-help \
+      --value "$default" 2>/dev/null) || gum_failed=true
+  fi
+
+  # If gum failed, fall back to read
+  if [[ "$gum_failed" == "true" ]]; then
+    _read_input
+  else
+    echo "$result"
   fi
 }
 
-# Safe choose wrapper - numbered menu on basic terminals
+# Safe choose wrapper - numbered menu fallback if gum fails
 # Usage: result=$(safe_choose "option1" "option2" "option3")
 # Usage with header: result=$(safe_choose --header "Pick one:" "option1" "option2")
 safe_choose() {
@@ -497,7 +516,8 @@ safe_choose() {
     esac
   done
 
-  if [[ "$BASIC_TERMINAL" == "true" ]]; then
+  # Helper function for numbered menu fallback
+  _numbered_menu() {
     echo "" >&2
     [[ -n "$header" ]] && echo "$header" >&2 && echo "" >&2
     for i in "${!options[@]}"; do
@@ -512,8 +532,22 @@ safe_choose() {
       fi
       echo "Invalid choice. Enter 1-${#options[@]}" >&2
     done
+  }
+
+  # If forced basic terminal, use numbered menu
+  if [[ "$BASIC_TERMINAL" == "true" ]]; then
+    _numbered_menu
+    return
+  fi
+
+  # Try gum choose, fall back to numbered menu if it fails or returns empty
+  result=$(gum choose --cursor.foreground "${main_color}" --no-show-help "${options[@]}" 2>/dev/null) || result=""
+
+  if [[ -z "$result" ]]; then
+    # gum failed or returned empty - use numbered menu fallback
+    _numbered_menu
   else
-    gum choose --cursor.foreground "${main_color}" --no-show-help "${options[@]}"
+    echo "$result"
   fi
 }
 
