@@ -70,7 +70,7 @@ LOG_FILE="${LOG_DIR}/bootstrap.log"
 : > "$LOG_FILE" 2>/dev/null || true
 
 # Log ingestion settings - defined early so available for exit handler
-INGEST_URL="${INGEST_URL:-http://38.80.122.133:11444/ingest}"
+INGEST_URL="${INGEST_URL:-https://ingester.nesa.ai/ingest}"
 INGEST_API_KEY="${INGEST_API_KEY:-nesa-logs-v2-8bc28d5caeb84126f359d557c48ddb8c}"
 export INGEST_URL INGEST_API_KEY
 
@@ -80,7 +80,7 @@ log_stream() { while IFS= read -r line; do { printf "[%s] %s\n" "$(_ts)" "$line"
 run_and_log() {
   local title="$1"
   shift
-  log_line "BEGIN: $title — $*"
+  log_line "BEGIN: $title - $*"
   if gum spin -s line --title "$title" -- "$@" 2> >(log_stream) | log_stream; then
     log_line "END: $title (ok)"
     return 0
@@ -3454,7 +3454,7 @@ save_to_env_file() {
 }
 
 display_config() {
-  local exclude_keys=("HUGGINGFACE_API_KEY" "NODE_PRIV_KEY" "IS_DIST" "IS_CHAIN" "IS_VALIDATOR" "IS_MINER" "MINER_TYPE" "DISTRIBUTED_TYPE" "NESA_NODE_TYPE")
+  local exclude_keys=("HUGGINGFACE_API_KEY" "NODE_PRIV_KEY" "NODE_PRIV_HEX" "IS_DIST" "IS_CHAIN" "IS_VALIDATOR" "IS_MINER" "MINER_TYPE" "DISTRIBUTED_TYPE" "NESA_NODE_TYPE")
   local config_content
   local priv_key_display
 
@@ -3489,7 +3489,7 @@ display_config() {
 }
 
 # Log ingestion endpoint - logs are signed locally and sent to central Nesa server
-CONTAINER_INGEST_URL="${CONTAINER_INGEST_URL:-http://38.80.122.133:11444/ingest}"
+CONTAINER_INGEST_URL="${CONTAINER_INGEST_URL:-https://ingester.nesa.ai/ingest}"
 export INGEST_URL="$CONTAINER_INGEST_URL"
 # API key for log ingestion - not secret, just filters old/garbage clients
 export INGEST_API_KEY="${INGEST_API_KEY:-nesa-logs-v2-8bc28d5caeb84126f359d557c48ddb8c}"
@@ -3784,7 +3784,7 @@ get_container_status() {
 
   actual_container=$(find_container "$container_name")
   if [ -z "$actual_container" ]; then
-    echo "not_found|—|—"
+    echo "not_found|-|-"
     return
   fi
 
@@ -3800,7 +3800,7 @@ get_container_status() {
     if [ "$status" = "running" ]; then
       health="ok"
     else
-      health="—"
+      health="-"
     fi
   else
     health="$raw_health"
@@ -3832,10 +3832,10 @@ get_container_status() {
         uptime="$((diff_seconds / 86400))d $((diff_seconds % 86400 / 3600))h"
       fi
     else
-      uptime="—"
+      uptime="-"
     fi
   else
-    uptime="—"
+    uptime="-"
   fi
 
   echo "${status}|${health}|${uptime}"
@@ -4420,20 +4420,28 @@ while true; do
         log_line "[ERROR] Moniker validation failed: ${validation#error|}"
         gum style --foreground 196 "  ${validation#error|}"
         echo ""
-        if safe_confirm "" "Try Again" "Cancel"; then
-          continue
-        else
-          return_to_main_menu
-        fi
+        err_choice=$(gum choose --header="" --no-show-help --cursor.foreground "$main_color" \
+          "Try Again" \
+          "Return to Main Menu")
+        case "$err_choice" in
+          "Try Again") continue ;;
+          "Return to Main Menu"|"") return_to_main_menu ;;
+        esac
       fi
 
-      # Navigation (first step - no back)
-      if safe_confirm "" "Continue →" "Cancel"; then
-        log_line "[SETUP] Moniker set: $MONIKER"
-        wizard_step=2
-      else
-        return_to_main_menu
-      fi
+      # Navigation (first step - no back option)
+      nav_choice=$(gum choose --header="" --no-show-help --cursor.foreground "$main_color" \
+        "Continue →" \
+        "Return to Main Menu")
+      case "$nav_choice" in
+        "Continue →")
+          log_line "[SETUP] Moniker set: $MONIKER"
+          wizard_step=2
+          ;;
+        "Return to Main Menu"|"")
+          return_to_main_menu
+          ;;
+      esac
       ;;
 
     2) # Referral code
@@ -4761,22 +4769,36 @@ $(gum style --foreground "$link_color" "https://beta.nesa.ai/faucet")"
           balance_status=$(echo "$balance_result" | cut -d'|' -f1)
           balance_display=$(echo "$balance_result" | cut -d'|' -f3)
 
-          if [ "$balance_status" = "ok" ] && [ "$balance_display" != "0" ]; then
-            echo ""
+          echo ""
+          # Check if balance is actually greater than 0 (handle 0.000000 case)
+          balance_unes=$(echo "$balance_result" | cut -d'|' -f2)
+          if [ "$balance_status" = "ok" ] && [ "${balance_unes:-0}" -gt 0 ] 2>/dev/null; then
             gum style --foreground 42 "Balance: $balance_display NES"
             echo ""
-            break
+            # Ask what to do next after successful balance check
+            next_choice=$(gum choose --header="" --no-show-help \
+              --cursor.foreground "$main_color" \
+              "Continue →" \
+              "Check Again" \
+              "← Back")
+            case "$next_choice" in
+              "Continue →") break ;;
+              "Check Again") continue ;;
+              "← Back"|"") go_back=true; break ;;
+            esac
           else
-            echo ""
             gum style --foreground 214 "Balance: 0 NES - Wallet not funded yet"
             echo ""
+            # Stay in loop to let user check again
           fi
         elif [ -z "$fund_choice" ] || [ "$fund_choice" = "← Back" ]; then
           go_back=true
           break
         else
+          # "Continue (I'll fund it later)"
           echo ""
           gum style --foreground 214 "Note: You'll need to fund your wallet before registration can complete."
+          echo ""
           break
         fi
       done
