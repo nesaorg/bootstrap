@@ -455,6 +455,8 @@ safe_input() {
   else
     read -r -p "${prompt}: " result
   fi
+  # Strip control characters (serial consoles add CR etc)
+  result=$(printf '%s' "$result" | tr -d '\r')
   echo "$result"
 }
 
@@ -472,6 +474,8 @@ safe_choose() {
   echo "" >&2
   while true; do
     read -r -p "Choose [1-${#options[@]}]: " result
+    # Strip whitespace and control characters (serial consoles add CR etc)
+    result=$(printf '%s' "$result" | tr -d '[:space:][:cntrl:]')
     if [[ "$result" =~ ^[0-9]+$ ]] && [ "$result" -ge 1 ] && [ "$result" -le "${#options[@]}" ]; then
       echo "${options[$((result-1))]}"
       return 0
