@@ -437,118 +437,47 @@ if detect_basic_terminal; then
   BASIC_TERMINAL=true
 fi
 
-# Safe input wrapper - uses simple read as fallback if gum fails
+# Safe input wrapper - always uses read for reliability across all terminals
 # Usage: result=$(safe_input "prompt" "default_value" [password])
 safe_input() {
   local prompt="$1"
   local default="$2"
   local is_password="$3"
   local result
-  local gum_failed=false
 
-  # Helper for read-based input
-  _read_input() {
-    if [[ "$is_password" == "password" ]]; then
-      read -r -s -p "${prompt}: " result
-      echo "" >&2  # newline after hidden input
-    elif [[ -n "$default" ]]; then
-      read -r -p "${prompt} [${default}]: " result
-      result="${result:-$default}"
-    else
-      read -r -p "${prompt}: " result
-    fi
-    echo "$result"
-  }
-
-  # If forced basic terminal, use read directly
-  if [[ "$BASIC_TERMINAL" == "true" ]]; then
-    _read_input
-    return
-  fi
-
-  # Try gum input, fall back to read if it fails
+  # Always use read - works on all terminals including serial consoles
   if [[ "$is_password" == "password" ]]; then
-    result=$(gum input --cursor.foreground "${main_color}" \
-      --prompt.foreground "${main_color}" \
-      --prompt "${prompt}: " \
-      --placeholder "" \
-      --password \
-      --width 60 \
-      --no-show-help \
-      --value "$default" 2>/dev/null) || gum_failed=true
+    read -r -s -p "${prompt}: " result
+    echo "" >&2  # newline after hidden input
+  elif [[ -n "$default" ]]; then
+    read -r -p "${prompt} [${default}]: " result
+    result="${result:-$default}"
   else
-    result=$(gum input --cursor.foreground "${main_color}" \
-      --prompt.foreground "${main_color}" \
-      --prompt "${prompt}: " \
-      --placeholder "" \
-      --width 60 \
-      --no-show-help \
-      --value "$default" 2>/dev/null) || gum_failed=true
+    read -r -p "${prompt}: " result
   fi
-
-  # If gum failed, fall back to read
-  if [[ "$gum_failed" == "true" ]]; then
-    _read_input
-  else
-    echo "$result"
-  fi
+  echo "$result"
 }
 
-# Safe choose wrapper - numbered menu fallback if gum fails
+# Safe choose wrapper - always uses numbered menu for reliability
 # Usage: result=$(safe_choose "option1" "option2" "option3")
-# Usage with header: result=$(safe_choose --header "Pick one:" "option1" "option2")
 safe_choose() {
-  local header=""
-  local options=()
+  local options=("$@")
   local i result
 
-  # Parse --header option
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --header)
-        header="$2"
-        shift 2
-        ;;
-      *)
-        options+=("$1")
-        shift
-        ;;
-    esac
+  # Always use numbered menu - works on all terminals
+  echo "" >&2
+  for i in "${!options[@]}"; do
+    echo "  $((i+1))) ${options[$i]}" >&2
   done
-
-  # Helper function for numbered menu fallback
-  _numbered_menu() {
-    echo "" >&2
-    [[ -n "$header" ]] && echo "$header" >&2 && echo "" >&2
-    for i in "${!options[@]}"; do
-      echo "  $((i+1))) ${options[$i]}" >&2
-    done
-    echo "" >&2
-    while true; do
-      read -r -p "Enter choice [1-${#options[@]}]: " result
-      if [[ "$result" =~ ^[0-9]+$ ]] && [ "$result" -ge 1 ] && [ "$result" -le "${#options[@]}" ]; then
-        echo "${options[$((result-1))]}"
-        return 0
-      fi
-      echo "Invalid choice. Enter 1-${#options[@]}" >&2
-    done
-  }
-
-  # If forced basic terminal, use numbered menu
-  if [[ "$BASIC_TERMINAL" == "true" ]]; then
-    _numbered_menu
-    return
-  fi
-
-  # Try gum choose, fall back to numbered menu if it fails or returns empty
-  result=$(gum choose --cursor.foreground "${main_color}" --no-show-help "${options[@]}" 2>/dev/null) || result=""
-
-  if [[ -z "$result" ]]; then
-    # gum failed or returned empty - use numbered menu fallback
-    _numbered_menu
-  else
-    echo "$result"
-  fi
+  echo "" >&2
+  while true; do
+    read -r -p "Choose [1-${#options[@]}]: " result
+    if [[ "$result" =~ ^[0-9]+$ ]] && [ "$result" -ge 1 ] && [ "$result" -le "${#options[@]}" ]; then
+      echo "${options[$((result-1))]}"
+      return 0
+    fi
+    echo "Invalid. Enter 1-${#options[@]}" >&2
+  done
 }
 
 # Safe confirm wrapper - uses choose-style on basic terminals (toggle doesn't work well)
