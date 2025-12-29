@@ -356,28 +356,43 @@ main_color=43
 link_color=69
 
 # Detect if running on a serial console or basic terminal with limited color support
-# Can be forced with BASIC_TERMINAL=true environment variable
+# Can be forced with BASIC_TERMINAL=true or BASIC_TERMINAL=false environment variable
 detect_basic_terminal() {
-  # Allow override via environment
+  # Allow override via environment (both ways)
   [[ "$BASIC_TERMINAL" == "true" ]] && return 0
+  [[ "$BASIC_TERMINAL" == "false" ]] && return 1
+
+  # WSL2 with Windows Terminal works fine - check for WSL environment
+  if [[ -n "$WSL_DISTRO_NAME" ]] || [[ -n "$WSL_INTEROP" ]] || grep -qi microsoft /proc/version 2>/dev/null; then
+    # WSL detected - only treat as basic if TERM is really basic
+    case "$TERM" in
+      dumb|vt100|vt102) return 0 ;;
+      *) return 1 ;;  # WSL with modern terminal
+    esac
+  fi
+
   # Check for serial console (ttyS*, ttyAMA*, ttyUSB*, etc.)
   local tty_name
   tty_name=$(tty 2>/dev/null || echo "")
   case "$tty_name" in
     /dev/ttyS*|/dev/ttyAMA*|/dev/ttyUSB*|/dev/hvc*|/dev/tty[0-9]*|/dev/console) return 0 ;;
   esac
-  # If not on a pseudo-terminal (pts), likely a basic terminal
-  # Cloud VM consoles (AWS, GCP, Azure serial) often aren't pts
+
+  # If on pseudo-terminal (pts), generally fine
   case "$tty_name" in
-    /dev/pts/*) ;;  # pseudo-terminal, probably fine
-    *) [[ -n "$tty_name" ]] && return 0 ;;  # not pts, treat as basic
+    /dev/pts/*) return 1 ;;  # pseudo-terminal, good
   esac
+
   # Check TERM variable for basic terminals
   case "$TERM" in
-    dumb|vt100|vt102|vt220|vt320|linux|screen|ansi|cons*|putty*|serial*) return 0 ;;
+    dumb|vt100|vt102|vt220|vt320|linux|ansi|cons*|serial*) return 0 ;;
+    xterm*|screen*|tmux*|rxvt*|putty*) return 1 ;;  # These support colors
   esac
+
   # No TERM set usually means basic terminal
   [[ -z "$TERM" ]] && return 0
+
+  # Unknown tty but has TERM set - probably fine
   return 1
 }
 
@@ -484,7 +499,7 @@ safe_choose() {
   done
 }
 
-# Safe confirm wrapper - uses choose-style on basic terminals (toggle doesn't work well)
+# Safe confirm wrapper - uses numbered menu on basic terminals (gum toggle doesn't work well)
 # Usage: if safe_confirm "Are you sure?"; then ...
 safe_confirm() {
   local prompt="${1:-Continue?}"
@@ -493,11 +508,21 @@ safe_confirm() {
   local result
 
   if [[ "$BASIC_TERMINAL" == "true" ]]; then
-    # Use gum choose style which works on serial consoles
+    # Use numbered menu for basic terminals (same as safe_choose)
     echo "" >&2
     echo "$prompt" >&2
-    result=$(gum choose --cursor.foreground "${main_color}" "$yes_text" "$no_text")
-    [[ "$result" == "$yes_text" ]]
+    echo "  1) $yes_text" >&2
+    echo "  2) $no_text" >&2
+    echo "" >&2
+    while true; do
+      read -r -p "Choose [1-2]: " result
+      result=$(printf '%s' "$result" | tr -d '[:space:][:cntrl:]')
+      case "$result" in
+        1) return 0 ;;  # Yes
+        2) return 1 ;;  # No
+        *) echo "Invalid. Enter 1 or 2" >&2 ;;
+      esac
+    done
   else
     gum confirm --prompt.foreground "${main_color}" "$prompt"
   fi
@@ -1471,7 +1496,17 @@ update_header() {
 
   echo ""
   # Print header - if it doesn't fit, print without centering
-  if ! print_test "${header}"; then
+  # Fallback to plain text if gum produced empty output
+  if [[ -z "$header" ]]; then
+    # Gum failed - print plain text fallback
+    echo "═══════════════════════════════════════════════════"
+    echo "  NESA NODE"
+    echo "  ─────────"
+    echo "  Moniker:    ${MONIKER:-not set}"
+    echo "  Node ID:    ${NODE_ID:-pending...}"
+    echo "  Status:     ${status:-unknown}"
+    echo "═══════════════════════════════════════════════════"
+  elif ! print_test "${header}"; then
     echo "${header}"
   fi
   echo ""
