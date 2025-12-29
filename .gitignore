@@ -7,7 +7,6 @@ expect.log
 
 
 *.md
-!docs/*.md
 !FAQ.md
 !readme.md
 !Troubleshooting.md

@@ -10,12 +10,29 @@ This repository contains wizardry aimed at making the deployment and configurati
 
 ## Features
 
-- **Cross-Platform Support**: Supports Linux, macOS, and Windows (via WSL).
-- **Automated Setup**: Automatically installs required dependencies like Docker, Gum, and jq.
-- **Node Configuration**: Allows configuration of nodes as Validators or Miners, with support for both distributed and non-distributed miners.
-- **Swarm Support**: Supports joining existing swarms or creating new ones for distributed mining tasks.
-- **Model Selection**: Easily select or specify a model to run on your miner node.
-- **Auto-Updates**: Nodes automatically receive updates to keep your system up to date with the latest improvements and features.
+### Setup & Installation
+- **One Command Install**: Download and run with a single curl command
+- **Cross-Platform**: Linux, macOS, Windows (WSL), ARM64 (Apple Silicon via Rosetta 2)
+- **Dependency Handling**: Installs Docker, gum, jq, and Python libraries automatically
+- **GPU Detection**: Finds NVIDIA GPUs and configures CUDA acceleration; falls back to CPU if no GPU
+
+### Wallet & Deposits
+- **Wallet Generation**: Create a new secp256k1 wallet or import an existing private key (Ethereum compatible)
+- **Balance Checking**: Query your NES balance directly from the CLI
+- **Deposit Management**: View current deposit, check minimum requirements, add stake
+- **On-Chain Registration**: Registers your node and miner on the Nesa blockchain with automatic retry
+
+### Node Control
+- **Start/Stop/Pause/Resume**: Full lifecycle management from the menu
+- **Status Dashboard**: View health, uptime, and overall node status at a glance
+- **Live Log Streaming**: Watch what your node is doing in real time
+- **Reconfigure**: Re-run the setup wizard to change settings
+- **Delete Node**: Clean uninstall that removes all containers, configs, and data
+
+### Operations
+- **Auto-Updates**: Your node pulls the latest updates automatically
+- **Chain State Checks**: Verifies registration and deposit before allowing node start
+- **Session Logging**: Full bootstrap activity logged to ~/.nesa/logs/bootstrap.log
 
 ## Prerequisites
 
@@ -23,13 +40,11 @@ Before running the bootstrap script, ensure your system meets the following requ
 
 ### Hardware Requirements
 
-- **CPU**: Multi-core processor
-- **Memory**: Minimum 4 GB RAM
-- **Storage**: 50 GB free disk space (more is recommended during testnet to allow us to send other jobs in order to test your node's capabilities)
+- **CPU**: Multi-core processor (4+ cores recommended)
+- **Memory**: 16 GB RAM minimum, 32 GB recommended
+- **Storage**: 100 GB free disk space (models and container images need room)
 - **Network**: Stable internet connection
-- **GPU**: CUDA-enabled GPUs recommended. MPS is also supported. CPU mining is available, but not for all models.
-
-**note**: For the testnet miner campain, we highly encourage closer to 16GB of RAM and 100GB of disk space. This is due to the nature of the testnet and the need to test the capabilities of the network.
+- **GPU**: NVIDIA GPU with 8+ GB VRAM recommended. CPU-only mode is available but slower.
 
 ### Software Requirements
 
@@ -40,13 +55,12 @@ Before running the bootstrap script, ensure your system meets the following requ
 
 ### Configuration Preparation
 
-Before starting the bootstrap script, you’ll need to have the following information ready:
+Before starting the bootstrap script, you may want to have the following ready:
 
-- **Private Key**: Required for registering your miner and receiving rewards. Refer to the [FAQ](./FAQ.md#2-why-do-i-need-to-provide-a-private-key-when-setting-up-a-miner-node) on how to obtain your private key.
-- **Hugging Face API Key**: Necessary for accessing models hosted on Hugging Face. Refer to the [FAQ](./FAQ.md#7-how-do-i-obtain-a-hugging-face-api-key) on how to obtain an API key.
-- **Referral Code** (optional): If you were referred by another user, have their wallet address or public key hex ready.
-
-Having these ready will ensure a smooth and efficient configuration process.
+- **Private Key** (optional): If you have an existing wallet, have your secp256k1 private key ready (same format as Ethereum). If you don't have one, the script can generate a new wallet for you.
+- **NES Tokens**: You'll need NES to stake as a deposit. For testnet, get tokens from the [faucet](https://beta.nesa.ai/faucet).
+- **Hugging Face API Key** (optional): Needed for some gated models. Get one at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
+- **Referral Code** (optional): A Nesa wallet address (nesa1...) of the person who referred you.
 
 ## Quickstart
 
@@ -58,29 +72,45 @@ bash <(curl -s https://raw.githubusercontent.com/nesaorg/bootstrap/master/bootst
 
 ### Configuration Steps
 
-1. **Choose a Moniker**: Provide a unique name for your node.
-2. **Select Node Type**: Decide whether your node will act as a Validator or Miner. See below for details on each type.
-3. **Provide Wallet Private Key**: Enter your wallet private key for  miner registration and to receive rewards.
-4. **Enter Referral Code** (optional): If applicable, provide the referral code.
-6. **Finalize Configuration**: Review and confirm the configuration before starting your node. The bootstrap script will provide a summary of your configuration and allow you to make changes before proceeding.
+1. **Node Name**: Choose a unique name (moniker) for your node.
+2. **Referral Code** (optional): Enter if you were referred by another user.
+3. **Hugging Face API Key** (optional): For accessing gated models.
+4. **Wallet Setup**: Import an existing private key or generate a new wallet. If generating, you'll be shown your private key once (save it securely).
+5. **Fund Wallet**: Your wallet needs NES tokens. The script will show your wallet address and check your balance.
+6. **Registration**: The script registers your node and miner on the Nesa blockchain.
+7. **Deposit**: Add the required stake (minimum shown during setup). Deposits are held in escrow with a 7-day unbonding period.
+8. **Start Node**: Once registered and funded, containers start automatically.
 
-## Node Types
+## How Mining Works
 
-### Validator
+Miners on the Nesa network run AI model inference tasks and earn NES rewards for their contributions. The network handles task distribution automatically based on your hardware capabilities. You don't need to choose models or configure distribution settings.
 
-Validators are responsible for securing the network by participating in consensus, committing new blocks to the blockchain, and voting on proposals. Validators require a significant amount of staked tokens and are selectively chosen. Currently, validators are not open for public deployment, and participants are encouraged to run miner nodes instead.
+Your node receives inference requests, processes them using the orchestrator container, and returns results to the network. All activity is cryptographically signed with your private key, ensuring proper attribution for rewards.
 
-### Miner
-
-Miners on the Nesa network perform computationally heavy tasks like running AI model inference. Miners contribute to the network's operation and earn rewards for their participation. The specific configuration of miners (distributed or non-distributed) is handled internally by the network.
+**Note**: Validators are not currently open for public deployment.
 
 ## Node Identification and Security
 
 Each node is assigned a unique node ID upon creation. This ID, along with a nonce and timestamp, is used to sign messages sent from the node to the network. This signing process ensures the authenticity of each node's communications without requiring the storage of private keys on our servers. The private key remains securely on the miner's machine and is used only for local signing operations.
 
+## Managing Your Node
+
+Once configured, re-running the bootstrap script opens the management menu:
+
+- **Node Status & Logs**: View container health, uptime, and stream live logs.
+- **Manage Wallet & Deposits**: Check balance, view deposit status, add more stake.
+- **Start/Stop/Pause/Resume**: Control your node containers.
+- **Reconfigure**: Run the setup wizard again with new settings.
+- **Delete Node**: Remove all containers and configuration (irreversible).
+
 ## Advanced Setup
 
-For users who need more control over the setup process, the script offers an "Advanced Wizardry" mode that allows you to fine-tune your node's configuration manually via the config files in `~/.nesa/env`. It is recommended to run the script once in Wizardry mode to generate the base config. Then you can modify the config files to your liking if needed. Running the script again in "Advanced Wizardry" mode will load the existing config from previous runs or manual edits, allowing you to skip the initial setup steps.
+Configuration files are stored in `~/.nesa/env/`:
+
+- `base.env`: Node identity (moniker, referral code, public IP)
+- `orchestrator.env`: Private key, node ID, Hugging Face API key
+
+You can edit these files directly. The script will detect existing configuration and skip the wizard on subsequent runs.
 
 ## Troubleshooting
 
@@ -100,21 +130,32 @@ For more detailed troubleshooting steps, please refer to our [Troubleshooting Gu
 
 For more detailed information on common questions and setup details, please visit our [FAQ](./FAQ.md) section.
 
-### Table of Contents
+### Quick Links
 
-1. [Do I need to be whitelisted to run a miner node?](#1-do-i-need-to-be-whitelisted-to-run-a-miner-node)
-2. [Why do I need to provide a private key when setting up a miner node?](#2-why-do-i-need-to-provide-a-private-key-when-setting-up-a-miner-node)
-3. [How do I find my node's ID (formerly public\_key/peer\_id)?](#3-how-do-i-find-my-nodes-id-formerly-public_keypeer_id)
-4. [I installed the validator, but I want to run a miner instead. What should I do?](#4-i-installed-the-validator-but-i-want-to-run-a-miner-instead-what-should-i-do)
-5. [What’s the difference between a Distributed Miner and a Non-Distributed Miner?](#5-whats-the-difference-between-a-distributed-miner-and-a-non-distributed-miner)
-6. [Why don't I see options to choose between distributed and non-distributed mining?](#6-why-dont-i-see-options-to-choose-between-distributed-and-non-distributed-mining)
-7. [Can I run a miner node without a GPU?](#7-can-i-run-a-miner-node-without-a-gpu)
-8. [How do I obtain a Hugging Face API key?](#8-how-do-i-obtain-a-hugging-face-api-key)
-9. [Why don't I see the option to specify a model anymore?](#9-why-dont-i-see-the-option-to-specify-a-model-anymore)
-10. [What is the difference between a miner and a validator?](#10-what-is-the-difference-between-a-miner-and-a-validator)
-11. [What is the difference between Wizardry and Advanced Wizardry in the bootstrap script?](#11-what-is-the-difference-between-wizardry-and-advanced-wizardry-in-the-bootstrap-script)
-12. [Is there current Windows support for running a miner?](#12-is-there-current-windows-support-for-running-a-miner)
-13. [How does the referral system work?](#13-how-does-the-referral-system-work)
+**Getting Started**
+- [Do I need to be whitelisted to run a miner node?](./FAQ.md#do-i-need-to-be-whitelisted-to-run-a-miner-node)
+- [Why do I need to provide a private key?](./FAQ.md#why-do-i-need-to-provide-a-private-key)
+- [Can I use my Ethereum wallet?](./FAQ.md#can-i-use-my-ethereum-wallet)
+- [How do I find my node ID?](./FAQ.md#how-do-i-find-my-node-id)
+
+**Setup & Requirements**
+- [Do I need to install Docker first?](./FAQ.md#do-i-need-to-install-docker-first)
+- [Do I need to install CUDA?](./FAQ.md#do-i-need-to-install-cuda)
+- [Can I run without a GPU?](./FAQ.md#can-i-run-without-a-gpu)
+- [Does it work on Windows?](./FAQ.md#does-it-work-on-windows)
+- [Does it work on Apple Silicon?](./FAQ.md#does-it-work-on-apple-silicon)
+
+**Wallet & Deposits**
+- [Where is my private key stored?](./FAQ.md#where-is-my-private-key-stored)
+- [What's the minimum deposit?](./FAQ.md#whats-the-minimum-deposit)
+- [How do I get NES tokens?](./FAQ.md#how-do-i-get-nes-tokens)
+
+**Operations**
+- [How do I check my node status?](./FAQ.md#how-do-i-check-my-node-status)
+- [How do I view logs?](./FAQ.md#how-do-i-view-logs)
+- [Why can't I start my node?](./FAQ.md#why-cant-i-start-my-node)
+- [How do I back up my node?](./FAQ.md#how-do-i-back-up-my-node)
+- [What is the difference between a miner and a validator?](./FAQ.md#what-is-the-difference-between-a-miner-and-a-validator)
 
 ## Community and Support
 
