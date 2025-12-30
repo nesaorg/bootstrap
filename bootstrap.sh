@@ -25,6 +25,10 @@ if [[ "$_raw_script_path" == /dev/fd/* ]] || [[ "$_raw_script_path" == /proc/sel
   # Running from process substitution - save script to ~/.nesa for restarts
   SCRIPT_PATH="${HOME}/.nesa/bootstrap.sh"
   RUNNING_FROM_PIPE=true
+  # Save a copy of the script for restarts (download fresh copy)
+  mkdir -p "${HOME}/.nesa"
+  curl -sL "https://raw.githubusercontent.com/nesaorg/bootstrap/master/bootstrap.sh" -o "$SCRIPT_PATH" 2>/dev/null || true
+  chmod +x "$SCRIPT_PATH" 2>/dev/null || true
 else
   SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
   RUNNING_FROM_PIPE=false
@@ -47,14 +51,15 @@ fi
 
 # Helper to restart the script - handles process substitution (bash <(curl...)) gracefully
 restart_script() {
-  if [[ "$RUNNING_FROM_PIPE" == "true" ]]; then
+  if [[ -f "$SCRIPT_PATH" ]]; then
+    exec bash "$SCRIPT_PATH"
+  else
+    # Fallback if script file doesn't exist
     echo ""
     echo "To return to the main menu, please re-run the bootstrap command:"
     echo "  bash <(curl -s https://raw.githubusercontent.com/nesaorg/bootstrap/master/bootstrap.sh)"
     echo ""
     exit 0
-  else
-    exec "$SCRIPT_PATH"
   fi
 }
 
@@ -444,9 +449,13 @@ else
 fi
 
 # Store basic terminal detection result for use in safe_input
-BASIC_TERMINAL=false
-if detect_basic_terminal; then
-  BASIC_TERMINAL=true
+# Preserve env var if already set by user
+if [[ -z "$BASIC_TERMINAL" ]]; then
+  if detect_basic_terminal; then
+    BASIC_TERMINAL=true
+  else
+    BASIC_TERMINAL=false
+  fi
 fi
 
 # Safe input wrapper - always uses read for reliability across all terminals
