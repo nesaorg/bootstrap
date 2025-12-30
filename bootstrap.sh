@@ -1294,14 +1294,9 @@ wizard_nav() {
 
   echo ""
   if [ "$show_back" = "yes" ]; then
-    gum choose --cursor.foreground "$main_color" \
-      "Continue" \
-      "← Back" \
-      "Cancel Setup"
+    safe_choose "Continue" "← Back" "Cancel Setup"
   else
-    gum choose --cursor.foreground "$main_color" \
-      "Continue" \
-      "Cancel Setup"
+    safe_choose "Continue" "Cancel Setup"
   fi
 }
 
@@ -2749,9 +2744,7 @@ $(gum style --foreground "$link_color" "https://beta.nesa.ai/faucet")"
       # Loop until wallet is funded
       while true; do
         local action
-        action=$(gum choose --cursor.foreground 42 \
-          "Check balance again" \
-          "← Back")
+        action=$(safe_choose "Check balance again" "← Back")
 
         if [ -z "$action" ] || [ "$action" = "← Back" ]; then
           return 2  # User chose to go back, not an error
@@ -2977,9 +2970,7 @@ a 7-day unbonding period.")"
     # If deposit already meets minimum, offer choice first
     if [ "$deposit_meets_minimum" = true ]; then
       local action_choice
-      action_choice=$(gum choose --cursor.foreground 42 \
-        "Add more deposit" \
-        "← Back")
+      action_choice=$(safe_choose "Add more deposit" "← Back")
 
       if [ -z "$action_choice" ] || [ "$action_choice" = "← Back" ]; then
         return 0
@@ -2991,7 +2982,7 @@ a 7-day unbonding period.")"
 
     echo ""
     local nav
-    nav=$(gum choose --cursor.foreground "$main_color" "Next →" "← Back")
+    nav=$(safe_choose "Next →" "← Back")
     if [ "$nav" = "← Back" ]; then
       continue  # Re-show deposit screen
     fi
@@ -3075,12 +3066,7 @@ a 7-day unbonding period.")"
 
     # Confirm - different options if already meets minimum
     local confirm
-    if [ "$deposit_meets_minimum" = true ]; then
-      confirm=$(gum choose --cursor.foreground 42 "Submit Deposit" "Change Amount" "← Back")
-    else
-      # Deposit is required, but allow back to menu to fund wallet first
-      confirm=$(gum choose --cursor.foreground 42 "Submit Deposit" "Change Amount" "← Back")
-    fi
+    confirm=$(safe_choose "Submit Deposit" "Change Amount" "← Back")
 
     case "$confirm" in
       "Submit Deposit")
@@ -3115,7 +3101,7 @@ a 7-day unbonding period.")"
           sleep 2
           # Ask if they want to add more
           local more_choice
-          more_choice=$(gum choose --cursor.foreground 42 "Add more deposit" "← Back")
+          more_choice=$(safe_choose "Add more deposit" "← Back")
           if [ -z "$more_choice" ] || [ "$more_choice" = "← Back" ]; then
             return 0
           fi
@@ -3133,10 +3119,7 @@ a 7-day unbonding period.")"
 
           # Offer menu after failure
           local fail_choice
-          fail_choice=$(gum choose --cursor.foreground 42 \
-            "Try again" \
-            "Change amount" \
-            "← Back")
+          fail_choice=$(safe_choose "Try again" "Change amount" "← Back")
 
           case "$fail_choice" in
             "Try again")
@@ -3255,9 +3238,7 @@ Node ID: ${node_id:-"(not available - start your node first)"}"
 
     # Menu options
     local choice
-    choice=$(gum choose \
-      --cursor.foreground "$main_color" \
-      --item.foreground "$link_color" \
+    choice=$(safe_choose \
       "Check Wallet Balance" \
       "Check Miner Deposit Status" \
       "Check Minimum Deposit Requirements" \
@@ -4013,9 +3994,7 @@ show_status_and_logs_menu() {
     show_node_status
 
     local choice
-    choice=$(gum choose \
-      --cursor.foreground "$main_color" \
-      --item.foreground "$link_color" \
+    choice=$(safe_choose \
       "Refresh Status" \
       "View Live Logs (orchestrator)" \
       "View Last 100 Lines" \
@@ -4293,10 +4272,7 @@ Your Nesa node is already configured."
 
     menu_options+=("Reconfigure Node" "Delete Node" "Exit")
 
-    existing_choice=$(gum choose \
-      --cursor.foreground "$main_color" \
-      --item.foreground "$link_color" \
-      "${menu_options[@]}")
+    existing_choice=$(safe_choose "${menu_options[@]}")
 
     case "$existing_choice" in
       "Node Status & Logs")
