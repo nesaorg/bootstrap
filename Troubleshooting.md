@@ -1,64 +1,260 @@
 # Troubleshooting
 
-### 1. I have an NVIDIA GPU, but I'm seeing this error:
-`Error response from daemon: could not select device driver "nvidia" with capabilities: [[gpu]] Error: Docker Compose failed to start.`
+## Docker Issues
 
-- **Solution:** Ensure that all the following components are installed:
-  - NVIDIA Driver
-  - CUDA
-  - NVIDIA Container Toolkit
+### Docker daemon not running
 
-  For a streamlined installation method on Ubuntu, you can use the helper script included in the bootstrap repository to install the NVIDIA Container Toolkit:
-  ```bash
-  bash <(curl -s https://raw.githubusercontent.com/nesaorg/bootstrap/master/helpers/install_nvidia_container_toolkit.sh)
-  ```
-  For NVIDIA Driver and CUDA, refer to the following guide:
-  - **NVIDIA Driver Installation:** Follow [NVIDIA's official installation guide](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html) for your specific distribution.
-  - **CUDA Installation:** Follow [this guide](https://developer.nvidia.com/cuda-downloads) for CUDA installation instructions.
+**Error**: `Cannot connect to the Docker daemon. Is the docker daemon running?`
 
-### 2. What does the error `Cannot connect to the Docker daemon at unix:///Users/fielding/.docker/run/docker.sock. Is the docker daemon running?` mean?
-- **Solution:** This error indicates that the Docker daemon is not running or that your user does not have permission to access it. To resolve this:
-  1. Ensure that the Docker daemon is running. You can start it with:
-     ```bash
-     sudo systemctl start docker
-     ```
-  2. If the Docker daemon is running, you may need to add your user to the Docker group to run Docker commands without `sudo`. Run the following commands:
-     ```bash
-     sudo usermod -aG docker $USER
-     newgrp docker
-     ```
-  3. After adding your user to the Docker group, you should be able to use Docker commands without `sudo`.
+**Solution**:
+```bash
+# Start Docker
+sudo systemctl start docker
 
-### 3. How do I restart, reset, or reconfigure my miner node?
-- **Solution:** Re-running the bootstrap script is the best way to reconfigure your miner node. The script will auto-load your previous configuration for convenience. If you prefer, you can edit the `.env` files for advanced configurations, but it’s generally easier to use the wizard mode of the bootstrap script. For backing up your node, see the next question.
+# Enable on boot
+sudo systemctl enable docker
+```
 
-### 4. How do I back up my miner node?
-- **Solution:** To back up your miner node, simply back up the `~/.nesa` directory. If you are working on a remote machine, you can use the following `scp` command:
-  ```bash
-  scp -r user@remote_host:~/.nesa /local_backup_directory
-  ```
+On macOS/Windows, open Docker Desktop and ensure it's running.
 
-### 5. How do I know if my miner is working correctly?
-- **Solution:** Monitor your node's dashboard using the link provided in the bootstrap script header. Your node should have a response count above 0 to confirm that it is working correctly. Not all requests will have a response due to jobs testing the node's capabilities, but that’s normal. If your node appears online but has a 0 response count, ensure port `31333` is forwarded/open on your firewall. If you notice your node is marked as down, it may have failed a job; it will be marked as back up as soon as it sends another heartbeat.
+### Permission denied
 
-### 6. My node is online but has 0 responses. What should I do?
-- **Solution:** Ensure that port `31333` is forwarded to your miner and open on your firewall. This port is necessary for communication with the network and processing jobs. If the port is correctly configured and you still see 0 responses, check your logs and ensure everything is configured correctly.
+**Error**: `permission denied while trying to connect to the Docker daemon socket`
 
-### 7. How do I stop my miner containers?
-- **Solution:** To stop all the miner containers, run the following command:
-  ```bash
-  cd ~/.nesa/docker && docker compose -f compose.yml -f compose.community.yml down
-  ```
+**Solution**: Add your user to the docker group:
+```bash
+sudo usermod -aG docker $USER
+newgrp docker
+```
 
-### 8. How do I know if my miner node is updated?
-- **Solution:** Updates are automatically pulled down by your miner. You can verify this at any point by checking the `docker logs watchtower` logs.
+Then log out and back in, or restart your terminal.
 
-### 9. I’m having issues with my miner. What should I do?
-- **Solution:** If you encounter issues, check the logs for your orchestrator by running:
-  ```bash
-  docker logs orchestrator
-  ```
-  Paste the output in a support ticket on Discord for further assistance.
+### Docker Compose failed
 
+**Error**: `Error: Docker Compose failed to start`
 
-Disclaimer: My LLM supervisor that runs on nesa network formatted this as markdown🤞
+**Solution**: Check if containers are already running or in a bad state:
+```bash
+docker ps -a
+docker rm -f orchestrator watchtower log-signer
+```
+
+Then re-run the bootstrap script.
+
+---
+
+## GPU & NVIDIA Issues
+
+### No GPU detected
+
+**Error**: `could not select device driver "nvidia" with capabilities: [[gpu]]`
+
+**Solution**: Install the NVIDIA Container Toolkit:
+```bash
+# Ubuntu/Debian
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+```
+
+Or use the helper script:
+```bash
+bash <(curl -s https://raw.githubusercontent.com/nesaorg/bootstrap/master/helpers/install_nvidia_container_toolkit.sh)
+```
+
+### nvidia-smi not found
+
+Your NVIDIA drivers aren't installed. Install them from [NVIDIA's website](https://www.nvidia.com/download/index.aspx) or via your package manager:
+```bash
+# Ubuntu
+sudo apt install nvidia-driver-535  # or latest version
+sudo reboot
+```
+
+### Running in CPU-only mode unexpectedly
+
+If you have a GPU but the script says "CPU-only mode":
+1. Check that `nvidia-smi` works: `nvidia-smi`
+2. Check Docker can see the GPU: `docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi`
+3. If step 2 fails, reinstall the NVIDIA Container Toolkit
+
+---
+
+## Python & Dependency Issues
+
+### pip install fails with "externally-managed-environment"
+
+**Error**: `error: externally-managed-environment`
+
+This happens on newer macOS (Homebrew Python) and some Linux distros. The script handles this automatically by creating a virtual environment at `~/.nesa/venv`. If you still see this error:
+
+```bash
+# Create venv manually
+python3 -m venv ~/.nesa/venv
+source ~/.nesa/venv/bin/activate
+pip install ecdsa base58 cryptography mospy-wallet httpx betterproto ripemd-hash
+```
+
+### Python not found
+
+Install Python 3:
+```bash
+# Ubuntu/Debian
+sudo apt install python3 python3-pip python3-venv
+
+# macOS
+brew install python3
+
+# CentOS/RHEL
+sudo yum install python3 python3-pip
+```
+
+### ripemd160 not available
+
+**Error**: `unsupported hash type ripemd160`
+
+OpenSSL 3.0+ disables ripemd160 by default. The script installs a pure Python implementation (`ripemd-hash`). If you still see this error:
+```bash
+pip install ripemd-hash
+```
+
+---
+
+## Chain & Registration Issues
+
+### Account not found
+
+**Error**: `account nesa1... not found`
+
+Your wallet needs to receive tokens before it exists on-chain. Use the testnet faucet:
+1. Go to [beta.nesa.ai/faucet](https://beta.nesa.ai/faucet)
+2. Enter your wallet address
+3. Wait a few seconds and retry
+
+### Sequence mismatch
+
+**Error**: `account sequence mismatch`
+
+This happens when transactions are sent too quickly. The script auto-retries up to 5 times with backoff. If it persists:
+1. Wait 30 seconds
+2. Re-run the operation
+
+### Node already registered
+
+**Error**: `node already registered`
+
+This is fine. Your node was registered in a previous run and the script will skip registration and continue.
+
+### Deposit below minimum
+
+**Error**: `Cannot start node - deposit is below minimum`
+
+Go to **Manage Wallet & Deposits** and add more stake. The minimum is shown in the menu.
+
+### Registration failed
+
+If node or miner registration fails repeatedly:
+1. Check your wallet has enough NES for gas fees
+2. Check network connectivity
+3. Try again in a few minutes (chain may be congested)
+4. Check Discord for any network issues
+
+---
+
+## Terminal & Display Issues
+
+### Script shows garbled output
+
+**Cause**: Your terminal doesn't support the TUI elements.
+
+**Solution**: Set basic terminal mode:
+```bash
+BASIC_TERMINAL=true bash <(curl -s https://raw.githubusercontent.com/nesaorg/bootstrap/master/bootstrap.sh)
+```
+
+### Colors invisible on light terminal
+
+The script auto-detects dark/light themes, but detection isn't perfect. If colors are hard to read, the script adjusts automatically on next run, or you can edit your terminal's color scheme.
+
+### Input not working on serial console
+
+Serial consoles (ttyS*, ttyAMA*) use simplified input. If you're on a cloud VM console or headless server, the script should auto-detect this. If not:
+```bash
+BASIC_TERMINAL=true bash <(curl ...)
+```
+
+---
+
+## Network Issues
+
+### Connection refused / timeout
+
+**Cause**: Network connectivity issues or firewall blocking.
+
+**Solution**:
+1. Check internet: `curl -s https://api.nesa.ai`
+2. Check if ports are blocked by firewall
+3. If behind corporate proxy, ensure Docker is configured to use it
+
+### Port 31333 issues
+
+Some features require port 31333 to be accessible. If your node shows 0 responses on the dashboard:
+1. Check firewall: `sudo ufw allow 31333/tcp`
+2. Check router port forwarding if behind NAT
+3. Verify with: `nc -zv your-public-ip 31333`
+
+---
+
+## Container Issues
+
+### Container keeps restarting
+
+Check logs for the actual error:
+```bash
+docker logs orchestrator --tail 100
+```
+
+Common causes:
+- Out of memory: Check RAM usage with `free -h`
+- Disk full: Check with `df -h`
+- Configuration error: Check `~/.nesa/env/orchestrator.env`
+
+### Watchtower not updating
+
+Check Watchtower logs:
+```bash
+docker logs watchtower
+```
+
+Watchtower checks every 5 minutes. If updates aren't happening:
+1. Check network connectivity
+2. Verify image registry is accessible: `docker pull ghcr.io/nesaorg/orchestrator:testnet-latest`
+
+### How to stop all containers
+
+```bash
+cd ~/.nesa/docker && docker compose down
+```
+
+Or use the **Stop Node** option in the main menu.
+
+---
+
+## Getting Help
+
+If you've tried these solutions and still have issues:
+
+1. Collect logs:
+   ```bash
+   docker logs orchestrator > node.log 2>&1
+   cp ~/.nesa/logs/bootstrap.log ./bootstrap.log
+   ```
+
+2. Join [Nesa Discord](https://discord.gg/nesa) and post in the support channel with:
+   - Your operating system
+   - The error message
+   - The log files (node.log and bootstrap.log)

@@ -25,6 +25,10 @@ if [[ "$_raw_script_path" == /dev/fd/* ]] || [[ "$_raw_script_path" == /proc/sel
   # Running from process substitution - save script to ~/.nesa for restarts
   SCRIPT_PATH="${HOME}/.nesa/bootstrap.sh"
   RUNNING_FROM_PIPE=true
+  # Save a copy of the script for restarts (download fresh copy)
+  mkdir -p "${HOME}/.nesa"
+  curl -sL "https://raw.githubusercontent.com/nesaorg/bootstrap/master/bootstrap.sh" -o "$SCRIPT_PATH" 2>/dev/null || true
+  chmod +x "$SCRIPT_PATH" 2>/dev/null || true
 else
   SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
   RUNNING_FROM_PIPE=false
@@ -47,14 +51,15 @@ fi
 
 # Helper to restart the script - handles process substitution (bash <(curl...)) gracefully
 restart_script() {
-  if [[ "$RUNNING_FROM_PIPE" == "true" ]]; then
+  if [[ -f "$SCRIPT_PATH" ]]; then
+    exec bash "$SCRIPT_PATH"
+  else
+    # Fallback if script file doesn't exist
     echo ""
     echo "To return to the main menu, please re-run the bootstrap command:"
     echo "  bash <(curl -s https://raw.githubusercontent.com/nesaorg/bootstrap/master/bootstrap.sh)"
     echo ""
     exit 0
-  else
-    exec "$SCRIPT_PATH"
   fi
 }
 
@@ -356,22 +361,40 @@ main_color=43
 link_color=69
 
 # Detect if running on a serial console or basic terminal with limited color support
-# Can be forced with BASIC_TERMINAL=true environment variable
+# Can be forced with BASIC_TERMINAL=true or BASIC_TERMINAL=false environment variable
 detect_basic_terminal() {
-  # Allow override via environment
+  # Allow override via environment (both ways)
   [[ "$BASIC_TERMINAL" == "true" ]] && return 0
+  [[ "$BASIC_TERMINAL" == "false" ]] && return 1
+
+  # WSL2 - use basic mode (numbered menus) for reliability until confirmed working
+  # Can override with BASIC_TERMINAL=false if gum works fine
+  if [[ -n "$WSL_DISTRO_NAME" ]] || [[ -n "$WSL_INTEROP" ]] || grep -qi microsoft /proc/version 2>/dev/null; then
+    return 0  # WSL = basic mode for safety
+  fi
+
   # Check for serial console (ttyS*, ttyAMA*, ttyUSB*, etc.)
   local tty_name
   tty_name=$(tty 2>/dev/null || echo "")
   case "$tty_name" in
     /dev/ttyS*|/dev/ttyAMA*|/dev/ttyUSB*|/dev/hvc*|/dev/tty[0-9]*|/dev/console) return 0 ;;
   esac
+
+  # If on pseudo-terminal (pts), generally fine
+  case "$tty_name" in
+    /dev/pts/*) return 1 ;;  # pseudo-terminal, good
+  esac
+
   # Check TERM variable for basic terminals
   case "$TERM" in
-    dumb|vt100|vt102|vt220|vt320|linux|screen|ansi|cons*) return 0 ;;
+    dumb|vt100|vt102|vt220|vt320|linux|ansi|cons*|serial*) return 0 ;;
+    xterm*|screen*|tmux*|rxvt*|putty*) return 1 ;;  # These support colors
   esac
+
   # No TERM set usually means basic terminal
   [[ -z "$TERM" ]] && return 0
+
+  # Unknown tty but has TERM set - probably fine
   return 1
 }
 
@@ -426,13 +449,16 @@ else
 fi
 
 # Store basic terminal detection result for use in safe_input
-BASIC_TERMINAL=false
-if detect_basic_terminal; then
-  BASIC_TERMINAL=true
+# Preserve env var if already set by user
+if [[ -z "$BASIC_TERMINAL" ]]; then
+  if detect_basic_terminal; then
+    BASIC_TERMINAL=true
+  else
+    BASIC_TERMINAL=false
+  fi
 fi
 
-# Safe input wrapper - uses simple read on basic terminals (serial consoles)
-# where gum input doesn't work well
+# Safe input wrapper - always uses read for reliability across all terminals
 # Usage: result=$(safe_input "prompt" "default_value" [password])
 safe_input() {
   local prompt="$1"
@@ -440,84 +466,53 @@ safe_input() {
   local is_password="$3"
   local result
 
-  if [[ "$BASIC_TERMINAL" == "true" ]]; then
-    # Basic terminal - use simple read
-    if [[ "$is_password" == "password" ]]; then
-      read -r -s -p "${prompt}: " result
-      echo "" >&2  # newline after hidden input
-    elif [[ -n "$default" ]]; then
-      read -r -p "${prompt} [${default}]: " result
-      result="${result:-$default}"
-    else
-      read -r -p "${prompt}: " result
-    fi
-    echo "$result"
+  # Always use read - works on all terminals including serial consoles
+  if [[ "$is_password" == "password" ]]; then
+    read -r -s -p "${prompt}: " result
+    echo "" >&2  # newline after hidden input
+  elif [[ -n "$default" ]]; then
+    read -r -p "${prompt} [${default}]: " result
+    result="${result:-$default}"
   else
-    # Normal terminal - use gum input
-    if [[ "$is_password" == "password" ]]; then
-      gum input --cursor.foreground "${main_color}" \
-        --prompt.foreground "${main_color}" \
-        --prompt "${prompt}: " \
-        --placeholder "" \
-        --password \
-        --width 60 \
-        --no-show-help \
-        --value "$default"
-    else
-      gum input --cursor.foreground "${main_color}" \
-        --prompt.foreground "${main_color}" \
-        --prompt "${prompt}: " \
-        --placeholder "" \
-        --width 60 \
-        --no-show-help \
-        --value "$default"
-    fi
+    read -r -p "${prompt}: " result
   fi
+  # Strip control characters (serial consoles add CR etc)
+  result=$(printf '%s' "$result" | tr -d '\r')
+  echo "$result"
 }
 
-# Safe choose wrapper - numbered menu on basic terminals
+# Safe choose wrapper - uses gum on normal terminals, numbered menu on basic terminals
 # Usage: result=$(safe_choose "option1" "option2" "option3")
-# Usage with header: result=$(safe_choose --header "Pick one:" "option1" "option2")
 safe_choose() {
-  local header=""
-  local options=()
+  local options=("$@")
   local i result
 
-  # Parse --header option
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --header)
-        header="$2"
-        shift 2
-        ;;
-      *)
-        options+=("$1")
-        shift
-        ;;
-    esac
-  done
-
-  if [[ "$BASIC_TERMINAL" == "true" ]]; then
-    echo "" >&2
-    [[ -n "$header" ]] && echo "$header" >&2 && echo "" >&2
-    for i in "${!options[@]}"; do
-      echo "  $((i+1))) ${options[$i]}" >&2
-    done
-    echo "" >&2
-    while true; do
-      read -r -p "Enter choice [1-${#options[@]}]: " result
-      if [[ "$result" =~ ^[0-9]+$ ]] && [ "$result" -ge 1 ] && [ "$result" -le "${#options[@]}" ]; then
-        echo "${options[$((result-1))]}"
-        return 0
-      fi
-      echo "Invalid choice. Enter 1-${#options[@]}" >&2
-    done
-  else
-    gum choose --cursor.foreground "${main_color}" --no-show-help "${options[@]}"
+  if [[ "$BASIC_TERMINAL" != "true" ]]; then
+    # Normal terminal - use gum choose for nice interactive experience
+    result=$(gum choose --cursor.foreground "$main_color" "${options[@]}")
+    echo "$result"
+    return 0
   fi
+
+  # Basic terminal - use numbered menu
+  echo "" >&2
+  for i in "${!options[@]}"; do
+    echo "  $((i+1))) ${options[$i]}" >&2
+  done
+  echo "" >&2
+  while true; do
+    read -r -p "Choose [1-${#options[@]}]: " result
+    # Strip whitespace and control characters (serial consoles add CR etc)
+    result=$(printf '%s' "$result" | tr -d '[:space:][:cntrl:]')
+    if [[ "$result" =~ ^[0-9]+$ ]] && [ "$result" -ge 1 ] && [ "$result" -le "${#options[@]}" ]; then
+      echo "${options[$((result-1))]}"
+      return 0
+    fi
+    echo "Invalid. Enter 1-${#options[@]}" >&2
+  done
 }
 
-# Safe confirm wrapper - uses choose-style on basic terminals (toggle doesn't work well)
+# Safe confirm wrapper - uses numbered menu on basic terminals (gum toggle doesn't work well)
 # Usage: if safe_confirm "Are you sure?"; then ...
 safe_confirm() {
   local prompt="${1:-Continue?}"
@@ -526,11 +521,21 @@ safe_confirm() {
   local result
 
   if [[ "$BASIC_TERMINAL" == "true" ]]; then
-    # Use gum choose style which works on serial consoles
+    # Use numbered menu for basic terminals (same as safe_choose)
     echo "" >&2
     echo "$prompt" >&2
-    result=$(gum choose --cursor.foreground "${main_color}" "$yes_text" "$no_text")
-    [[ "$result" == "$yes_text" ]]
+    echo "  1) $yes_text" >&2
+    echo "  2) $no_text" >&2
+    echo "" >&2
+    while true; do
+      read -r -p "Choose [1-2]: " result
+      result=$(printf '%s' "$result" | tr -d '[:space:][:cntrl:]')
+      case "$result" in
+        1) return 0 ;;  # Yes
+        2) return 1 ;;  # No
+        *) echo "Invalid. Enter 1 or 2" >&2 ;;
+      esac
+    done
   else
     gum confirm --prompt.foreground "${main_color}" "$prompt"
   fi
@@ -1298,14 +1303,9 @@ wizard_nav() {
 
   echo ""
   if [ "$show_back" = "yes" ]; then
-    gum choose --cursor.foreground "$main_color" \
-      "Continue" \
-      "← Back" \
-      "Cancel Setup"
+    safe_choose "Continue" "← Back" "Cancel Setup"
   else
-    gum choose --cursor.foreground "$main_color" \
-      "Continue" \
-      "Cancel Setup"
+    safe_choose "Continue" "Cancel Setup"
   fi
 }
 
@@ -1504,7 +1504,17 @@ update_header() {
 
   echo ""
   # Print header - if it doesn't fit, print without centering
-  if ! print_test "${header}"; then
+  # Fallback to plain text if gum produced empty output
+  if [[ -z "$header" ]]; then
+    # Gum failed - print plain text fallback
+    echo "═══════════════════════════════════════════════════"
+    echo "  NESA NODE"
+    echo "  ─────────"
+    echo "  Moniker:    ${MONIKER:-not set}"
+    echo "  Node ID:    ${NODE_ID:-pending...}"
+    echo "  Status:     ${status:-unknown}"
+    echo "═══════════════════════════════════════════════════"
+  elif ! print_test "${header}"; then
     echo "${header}"
   fi
   echo ""
@@ -2743,9 +2753,7 @@ $(gum style --foreground "$link_color" "https://beta.nesa.ai/faucet")"
       # Loop until wallet is funded
       while true; do
         local action
-        action=$(gum choose --cursor.foreground 42 \
-          "Check balance again" \
-          "← Back")
+        action=$(safe_choose "Check balance again" "← Back")
 
         if [ -z "$action" ] || [ "$action" = "← Back" ]; then
           return 2  # User chose to go back, not an error
@@ -2971,9 +2979,7 @@ a 7-day unbonding period.")"
     # If deposit already meets minimum, offer choice first
     if [ "$deposit_meets_minimum" = true ]; then
       local action_choice
-      action_choice=$(gum choose --cursor.foreground 42 \
-        "Add more deposit" \
-        "← Back")
+      action_choice=$(safe_choose "Add more deposit" "← Back")
 
       if [ -z "$action_choice" ] || [ "$action_choice" = "← Back" ]; then
         return 0
@@ -2985,7 +2991,7 @@ a 7-day unbonding period.")"
 
     echo ""
     local nav
-    nav=$(gum choose --cursor.foreground "$main_color" "Next →" "← Back")
+    nav=$(safe_choose "Next →" "← Back")
     if [ "$nav" = "← Back" ]; then
       continue  # Re-show deposit screen
     fi
@@ -3069,12 +3075,7 @@ a 7-day unbonding period.")"
 
     # Confirm - different options if already meets minimum
     local confirm
-    if [ "$deposit_meets_minimum" = true ]; then
-      confirm=$(gum choose --cursor.foreground 42 "Submit Deposit" "Change Amount" "← Back")
-    else
-      # Deposit is required, but allow back to menu to fund wallet first
-      confirm=$(gum choose --cursor.foreground 42 "Submit Deposit" "Change Amount" "← Back")
-    fi
+    confirm=$(safe_choose "Submit Deposit" "Change Amount" "← Back")
 
     case "$confirm" in
       "Submit Deposit")
@@ -3109,7 +3110,7 @@ a 7-day unbonding period.")"
           sleep 2
           # Ask if they want to add more
           local more_choice
-          more_choice=$(gum choose --cursor.foreground 42 "Add more deposit" "← Back")
+          more_choice=$(safe_choose "Add more deposit" "← Back")
           if [ -z "$more_choice" ] || [ "$more_choice" = "← Back" ]; then
             return 0
           fi
@@ -3127,10 +3128,7 @@ a 7-day unbonding period.")"
 
           # Offer menu after failure
           local fail_choice
-          fail_choice=$(gum choose --cursor.foreground 42 \
-            "Try again" \
-            "Change amount" \
-            "← Back")
+          fail_choice=$(safe_choose "Try again" "Change amount" "← Back")
 
           case "$fail_choice" in
             "Try again")
@@ -3249,9 +3247,7 @@ Node ID: ${node_id:-"(not available - start your node first)"}"
 
     # Menu options
     local choice
-    choice=$(gum choose \
-      --cursor.foreground "$main_color" \
-      --item.foreground "$link_color" \
+    choice=$(safe_choose \
       "Check Wallet Balance" \
       "Check Miner Deposit Status" \
       "Check Minimum Deposit Requirements" \
@@ -4007,9 +4003,7 @@ show_status_and_logs_menu() {
     show_node_status
 
     local choice
-    choice=$(gum choose \
-      --cursor.foreground "$main_color" \
-      --item.foreground "$link_color" \
+    choice=$(safe_choose \
       "Refresh Status" \
       "View Live Logs (orchestrator)" \
       "View Last 100 Lines" \
@@ -4287,10 +4281,7 @@ Your Nesa node is already configured."
 
     menu_options+=("Reconfigure Node" "Delete Node" "Exit")
 
-    existing_choice=$(gum choose \
-      --cursor.foreground "$main_color" \
-      --item.foreground "$link_color" \
-      "${menu_options[@]}")
+    existing_choice=$(safe_choose "${menu_options[@]}")
 
     case "$existing_choice" in
       "Node Status & Logs")
