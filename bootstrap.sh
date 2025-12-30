@@ -362,13 +362,10 @@ detect_basic_terminal() {
   [[ "$BASIC_TERMINAL" == "true" ]] && return 0
   [[ "$BASIC_TERMINAL" == "false" ]] && return 1
 
-  # WSL2 with Windows Terminal works fine - check for WSL environment
+  # WSL2 - use basic mode (numbered menus) for reliability until confirmed working
+  # Can override with BASIC_TERMINAL=false if gum works fine
   if [[ -n "$WSL_DISTRO_NAME" ]] || [[ -n "$WSL_INTEROP" ]] || grep -qi microsoft /proc/version 2>/dev/null; then
-    # WSL detected - only treat as basic if TERM is really basic
-    case "$TERM" in
-      dumb|vt100|vt102) return 0 ;;
-      *) return 1 ;;  # WSL with modern terminal
-    esac
+    return 0  # WSL = basic mode for safety
   fi
 
   # Check for serial console (ttyS*, ttyAMA*, ttyUSB*, etc.)
@@ -475,13 +472,20 @@ safe_input() {
   echo "$result"
 }
 
-# Safe choose wrapper - always uses numbered menu for reliability
+# Safe choose wrapper - uses gum on normal terminals, numbered menu on basic terminals
 # Usage: result=$(safe_choose "option1" "option2" "option3")
 safe_choose() {
   local options=("$@")
   local i result
 
-  # Always use numbered menu - works on all terminals
+  if [[ "$BASIC_TERMINAL" != "true" ]]; then
+    # Normal terminal - use gum choose for nice interactive experience
+    result=$(gum choose --cursor.foreground "$main_color" "${options[@]}")
+    echo "$result"
+    return 0
+  fi
+
+  # Basic terminal - use numbered menu
   echo "" >&2
   for i in "${!options[@]}"; do
     echo "  $((i+1))) ${options[$i]}" >&2
