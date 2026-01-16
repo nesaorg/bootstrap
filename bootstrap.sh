@@ -1069,15 +1069,26 @@ check_python_and_ecdsa() {
 
     local install_success=false
 
+    # On WSL/Linux, pre-install build dependencies for cryptography if needed
+    # This helps avoid compilation failures when pre-built wheels aren't available
+    if [[ "$OSTYPE" == "linux"* ]] && command_exists apt-get; then
+      if [[ " ${missing_libs[*]} " =~ " cryptography " ]]; then
+        echo "Installing build dependencies for cryptography..."
+        run_with_sudo apt-get update -qq 2>/dev/null || true
+        run_with_sudo apt-get install -y -qq build-essential libffi-dev python3-dev 2>/dev/null || true
+      fi
+    fi
+
     # Method 1: Try standard pip install with various flags (works on most Linux)
+    # Use --prefer-binary to avoid compilation issues with cryptography
     if [ "$install_success" = false ]; then
-      if pip3 install --user --break-system-packages "${missing_libs[@]}" 2>&1; then
+      if pip3 install --user --prefer-binary --break-system-packages "${missing_libs[@]}" 2>/dev/null; then
         install_success=true
-      elif pip3 install --user "${missing_libs[@]}" 2>&1; then
+      elif pip3 install --user --prefer-binary "${missing_libs[@]}" 2>/dev/null; then
         install_success=true
-      elif python3 -m pip install --user --break-system-packages "${missing_libs[@]}" 2>&1; then
+      elif python3 -m pip install --user --prefer-binary --break-system-packages "${missing_libs[@]}" 2>/dev/null; then
         install_success=true
-      elif python3 -m pip install --user "${missing_libs[@]}" 2>&1; then
+      elif python3 -m pip install --user --prefer-binary "${missing_libs[@]}" 2>/dev/null; then
         install_success=true
       fi
     fi
@@ -1107,7 +1118,10 @@ check_python_and_ecdsa() {
         PYTHON_CMD="${NESA_VENV}/bin/python3"
         PIP_CMD="${NESA_VENV}/bin/pip"
 
-        if $PIP_CMD install "${missing_libs[@]}" 2>/dev/null; then
+        # Upgrade pip first to ensure we have latest wheel support
+        $PIP_CMD install --upgrade pip 2>/dev/null || true
+
+        if $PIP_CMD install --prefer-binary "${missing_libs[@]}" 2>/dev/null; then
           install_success=true
           echo "Python libraries installed in virtual environment."
           echo ""
@@ -1129,11 +1143,18 @@ check_python_and_ecdsa() {
       echo "Option 1 - Use a virtual environment (recommended):"
       echo "  python3 -m venv ~/.nesa/venv"
       echo "  source ~/.nesa/venv/bin/activate"
-      echo "  pip install ${missing_libs[*]}"
+      echo "  pip install --prefer-binary ${missing_libs[*]}"
       echo ""
       echo "Option 2 - Force system install (if you understand the risks):"
-      echo "  pip3 install --user --break-system-packages ${missing_libs[*]}"
+      echo "  pip3 install --user --prefer-binary --break-system-packages ${missing_libs[*]}"
       echo ""
+      # Check if on WSL and show additional instructions
+      if grep -qi microsoft /proc/version 2>/dev/null; then
+        echo "WSL users: If cryptography fails to build, install build tools:"
+        echo "  sudo apt update && sudo apt install -y python3-dev build-essential libffi-dev"
+        echo "  Then retry the pip install above."
+        echo ""
+      fi
       echo "Then run this script again."
       echo "=========================================="
       exit 1
@@ -1146,10 +1167,21 @@ check_python_and_ecdsa() {
     if [ ${#still_missing[@]} -gt 0 ]; then
       echo ""
       echo "=========================================="
-      echo "WARNING: Some packages still not importable: ${still_missing[*]}"
+      echo "ERROR: Python packages not importable: ${still_missing[*]}"
       echo "Python being used: $PYTHON_CMD"
-      echo "This may cause node ID generation to fail."
+      echo ""
+      echo "This will cause node ID generation to fail."
+      echo ""
+      echo "Please install manually:"
+      echo "  $PYTHON_CMD -m pip install --prefer-binary ${still_missing[*]}"
+      echo ""
+      # Check if on WSL and show additional instructions
+      if grep -qi microsoft /proc/version 2>/dev/null; then
+        echo "WSL users: If cryptography fails, install build dependencies first:"
+        echo "  sudo apt update && sudo apt install -y python3-dev build-essential libffi-dev"
+      fi
       echo "=========================================="
+      exit 1
     fi
   fi
 
@@ -4104,7 +4136,8 @@ ensure_node_id() {
 
     NODE_ID=$(generate_node_id "$private_key" 2>&1)
 
-    if [[ -z "$NODE_ID" || "$NODE_ID" == *"Error"* || "$NODE_ID" == *"Traceback"* ]]; then
+    # Check for errors (case-insensitive) or empty result
+    if [[ -z "$NODE_ID" || "$NODE_ID" == *"ERROR"* || "$NODE_ID" == *"Error"* || "$NODE_ID" == *"error"* || "$NODE_ID" == *"Traceback"* ]]; then
       log_line "ERROR: Failed to generate NODE_ID. Python output: $NODE_ID"
       log_line "Ensure 'base58' and 'cryptography' are installed: pip install base58 cryptography"
       NODE_ID=""
