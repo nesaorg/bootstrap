@@ -1071,13 +1071,13 @@ check_python_and_ecdsa() {
 
     # Method 1: Try standard pip install with various flags (works on most Linux)
     if [ "$install_success" = false ]; then
-      if pip3 install --user --break-system-packages "${missing_libs[@]}" 2>/dev/null; then
+      if pip3 install --user --break-system-packages "${missing_libs[@]}" 2>&1; then
         install_success=true
-      elif pip3 install --user "${missing_libs[@]}" 2>/dev/null; then
+      elif pip3 install --user "${missing_libs[@]}" 2>&1; then
         install_success=true
-      elif python3 -m pip install --user --break-system-packages "${missing_libs[@]}" 2>/dev/null; then
+      elif python3 -m pip install --user --break-system-packages "${missing_libs[@]}" 2>&1; then
         install_success=true
-      elif python3 -m pip install --user "${missing_libs[@]}" 2>/dev/null; then
+      elif python3 -m pip install --user "${missing_libs[@]}" 2>&1; then
         install_success=true
       fi
     fi
@@ -1137,6 +1137,19 @@ check_python_and_ecdsa() {
       echo "Then run this script again."
       echo "=========================================="
       exit 1
+    fi
+
+    # Verify installation succeeded by re-checking imports
+    local still_missing=()
+    $PYTHON_CMD -c "import base58" 2>/dev/null || still_missing+=("base58")
+    $PYTHON_CMD -c "from cryptography.hazmat.primitives.asymmetric import ed25519" 2>/dev/null || still_missing+=("cryptography")
+    if [ ${#still_missing[@]} -gt 0 ]; then
+      echo ""
+      echo "=========================================="
+      echo "WARNING: Some packages still not importable: ${still_missing[*]}"
+      echo "Python being used: $PYTHON_CMD"
+      echo "This may cause node ID generation to fail."
+      echo "=========================================="
     fi
   fi
 
@@ -1984,10 +1997,19 @@ print(private_key_to_address('$private_key'))
 generate_node_id() {
   local private_key="$1"
   ${NESA_PYTHON_CMD:-python3} -c "
+import sys
 import hashlib
-import base58
-from cryptography.hazmat.primitives.asymmetric import ed25519
-from cryptography.hazmat.primitives import serialization
+try:
+    import base58
+except ImportError:
+    print('ERROR: base58 not installed', file=sys.stderr)
+    sys.exit(1)
+try:
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+    from cryptography.hazmat.primitives import serialization
+except ImportError:
+    print('ERROR: cryptography not installed', file=sys.stderr)
+    sys.exit(1)
 
 def strip_0x_prefix(key_hex):
     return key_hex[2:] if key_hex.startswith('0x') else key_hex
@@ -2336,37 +2358,26 @@ PYEOF
 register_miner() {
   local node_id="$1"
   local private_key="$2"
-  local model_name="${3:-nesaorg/llama-3.2-1b-instruct-ee}"
-  local max_retries="${4:-5}"
+  local max_retries="${3:-5}"
 
-  log_line "Registering miner: node_id=$node_id model=$model_name (max_retries=$max_retries)"
+  log_line "Registering miner: node_id=$node_id (max_retries=$max_retries)"
 
   ${NESA_PYTHON_CMD:-python3} << PYEOF
 import sys
-import json
 import time
 import re
 from dataclasses import dataclass
-from typing import List
 import betterproto
 from mospy import Account, Transaction
 from mospy.clients import HTTPClient
 from google.protobuf import any_pb2 as any_pb
 import httpx
 
-# Define MsgRegisterMiner
+# Define MsgRegisterMiner (simplified for testnet-3)
 @dataclass(eq=False, repr=False)
 class MsgRegisterMiner(betterproto.Message):
     creator: str = betterproto.string_field(1)
     node_id: str = betterproto.string_field(2)
-    start_block: int = betterproto.uint64_field(3)
-    end_block: int = betterproto.uint64_field(4)
-    block_ids: List[int] = betterproto.uint32_field(5)
-    torch_dtype: str = betterproto.string_field(6)
-    quant_type: str = betterproto.string_field(7)
-    cache_tokens_left: int = betterproto.uint64_field(8)
-    inference_rps: float = betterproto.double_field(9)
-    model_name: str = betterproto.string_field(10)
 
 def build_and_broadcast_tx(account, msg, lcd_url):
     """Build and broadcast transaction, returns (success, result_msg)"""
@@ -2410,7 +2421,6 @@ def build_and_broadcast_tx(account, msg, lcd_url):
 try:
     private_key = "${private_key}"
     node_id = "${node_id}"
-    model_name = "${model_name}"
     max_retries = int(${max_retries})
     lcd_url = "${LCD_URL}"
 
@@ -2418,18 +2428,10 @@ try:
     account = Account(private_key=private_key, hrp="nesa")
     wallet_address = account.address
 
-    # Create message
+    # Create message (simplified for testnet-3: only creator + node_id)
     msg = MsgRegisterMiner(
         creator=wallet_address,
-        node_id=node_id,
-        start_block=1,
-        end_block=2,
-        block_ids=[0],
-        torch_dtype="fp16",
-        quant_type="fp4",
-        cache_tokens_left=0,
-        inference_rps=100.0,
-        model_name=model_name
+        node_id=node_id
     )
 
     # Initial load to verify account exists (with retry for indexing delay)
@@ -2850,7 +2852,7 @@ $(gum style --foreground "$link_color" "https://beta.nesa.ai/faucet")"
     local retry_count=0
 
     while [ $retry_count -lt $max_retries ]; do
-      miner_result=$(register_miner "$node_id" "$private_key" "nesaorg/llama-3.2-1b-instruct-ee")
+      miner_result=$(register_miner "$node_id" "$private_key")
       miner_tx_status=$(echo "$miner_result" | cut -d'|' -f1)
       miner_tx_data=$(echo "$miner_result" | cut -d'|' -f2-)
 
@@ -4100,7 +4102,14 @@ ensure_node_id() {
     identity_dir=$(dirname "$node_id_file")
     mkdir -p "$identity_dir"
 
-    NODE_ID=$(generate_node_id "$private_key")
+    NODE_ID=$(generate_node_id "$private_key" 2>&1)
+
+    if [[ -z "$NODE_ID" || "$NODE_ID" == *"Error"* || "$NODE_ID" == *"Traceback"* ]]; then
+      log_line "ERROR: Failed to generate NODE_ID. Python output: $NODE_ID"
+      log_line "Ensure 'base58' and 'cryptography' are installed: pip install base58 cryptography"
+      NODE_ID=""
+      return 1
+    fi
 
     # Save to file
     echo -n "$NODE_ID" > "$node_id_file"
