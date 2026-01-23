@@ -37,7 +37,7 @@ log_stream() { while IFS= read -r line; do printf "[%s] %s\n" "$(_ts)" "$line" >
 run_and_log() {
   local title="$1"
   shift
-  log_line "BEGIN: $title — $*"
+  log_line "BEGIN: $title - $*"
   if gum spin -s line --title "$title" -- "$@" 2> >(log_stream) | log_stream; then
     log_line "END: $title (ok)"
     return 0
@@ -265,7 +265,7 @@ install_gum() {
     ;;
   esac
 }
-log_line "[STAGE 1]: checking deps (gum, jq, python)"
+log_line "[STAGE 1]: checking dependencies (gum, jq, python)"
 
 check_gum_installed() {
   if ! command_exists gum; then
@@ -2148,7 +2148,7 @@ PUBLIC_IP=$(curl -s4 ifconfig.me)
 # bootstrap core logic
 #
 
-# deps
+# dependencies
 check_gum_installed
 check_docker_installed
 check_jq_installed
